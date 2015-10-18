@@ -14,4 +14,4 @@ file(GLOB HEADERS Include/*.h)
 
 add_library(CenterFind2D ${SOURCES} ${HEADERS})
 
-target_include_directories(CenterFind2D Include)
+target_include_directories(CenterFind2D PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/Include /usr/local/include)

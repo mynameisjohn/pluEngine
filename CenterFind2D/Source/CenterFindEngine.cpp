@@ -4,7 +4,7 @@
 #include <string>
 #include <sstream>
 
-#include <opencv2\core.hpp>
+#include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/highgui.hpp>
 
@@ -45,7 +45,7 @@ CenterFindEngine::Parameters::Parameters(std::array<std::string, 12> args){
 	uint32_t idx(0);
 	m_strInputStem = args[idx++];
 	m_strOutputStem = args[idx++];
-	m_strFileExt = args[idx++];
+	m_strFileExt = ".tif";
 	m_uFileNamePad = 4; // ?
 	std::stringstream(args[idx++]) >> m_uStartOfStack;
 	std::stringstream(args[idx++]) >> m_uEndOfStack;
@@ -294,8 +294,10 @@ CenterFindEngine::PMetricsVec CenterFindEngine::Statistics::GetMetrics(CenterFin
 	return ret;
 }
 
-CenterFindEngine::CenterFindEngine(const CenterFindEngine::Parameters params) {
-	for (int i = params.m_uStartOfStack; i < params.m_uEndOfStack; i++) {
+CenterFindEngine::CenterFindEngine(const CenterFindEngine::Parameters params) :
+m_Params(params)
+{
+	for (int i = m_Params.m_uStartOfStack; i < m_Params.m_uEndOfStack; i++) {
 		std::string fileName = m_Params.GetFileName(i);
 		FIMULTIBITMAP * FI_Input = FreeImage_OpenMultiBitmap(FIF_TIFF, fileName.c_str(), 0, 1, 1, TIFF_DEFAULT);
 		for (int j = m_Params.m_uStartFrame; j < m_Params.m_uEndFrame; j++)

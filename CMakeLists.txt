@@ -25,7 +25,8 @@ add_subdirectory(Struct3Dt)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}
 					${CMAKE_CURRENT_SOURCE_DIR}/CenterFind2D/Include
 					${CMAKE_CURRENT_SOURCE_DIR}/Struct3Dt/Include
-					${CMAKE_CURRENT_SOURCE_DIR}/Link3Dt/Include)
+					${CMAKE_CURRENT_SOURCE_DIR}/Link3Dt/Include
+					/usr/local/include)
 
 set(SOURCES main.cpp)
 
@@ -34,5 +35,9 @@ add_executable(PLuTARC_Tests ${SOURCES})
 target_link_libraries(PLuTARC_Tests LINK_PUBLIC 
 									CenterFind2D 
 									Link3Dt 
-									Struct3Dt)
+									Struct3Dt
+									freeimage
+									opencv_core
+									opencv_imgproc
+									opencv_highgui)
 

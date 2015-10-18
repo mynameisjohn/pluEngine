@@ -9,4 +9,4 @@ file(GLOB HEADERS Include/*.h)
 
 add_library(Struct3Dt ${SOURCES} ${HEADERS})
 
-target_include_directories(Struct3Dt Include)
+target_include_directories(Struct3Dt PUBLIC Include)

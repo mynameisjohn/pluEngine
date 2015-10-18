@@ -9,4 +9,4 @@ file(GLOB HEADERS Include/*.h)
 
 add_library(Link3Dt ${SOURCES} ${HEADERS})
 
-target_include_directories(Link3Dt Include)
+target_include_directories(Link3Dt PUBLIC Include)
