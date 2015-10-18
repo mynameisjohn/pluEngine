@@ -83,8 +83,10 @@ CenterFindEngine::Data::Data(FIBITMAP * bmp) {
 	
 	cvtColor(image, image, CV_RGB2GRAY);
 	
-	image.convertTo(image, CV_32FC1);
+	image.convertTo(image, CV_32F);
+    image /= 255.f;
 
+    image.copyTo(m_InputImg);
 	m_BypassedImg = cv::UMat(image.size(), image.type(), 0.f);
 	m_ThresholdImg = cv::UMat(image.size(), image.type(), 0.f);
 	m_LocalMaxImg = cv::UMat(image.size(), image.type(), 0.f);
@@ -155,33 +157,37 @@ m_fPctleThreshold(pctl_thresh)
 
 void CenterFindEngine::LocalMax::Execute(CenterFindEngine::Data& data) {
 	// Make some references
-	cv::UMat& in = data.m_InputImg;
+	//cv::UMat& in = data.m_InputImg;
 	cv::UMat& bp = data.m_BypassedImg;
-	cv::UMat& bpThresh = data.m_ThresholdImg;
+	//cv::UMat& bpThresh = data.m_ThresholdImg;
 	cv::UMat& lm = data.m_LocalMaxImg;
 	cv::UMat& particles = data.m_ParticleImg;
 
 	// Tmp buffer
-	cv::UMat tmp(in.size(), CV_8U, m_fPctleThreshold);
+	//cv::UMat tmp(in.size(), CV_8U, m_fPctleThreshold);
 
 	// Set the threshold to be entirely base value
-	bpThresh.setTo(m_fPctleThreshold);
+	// bpThresh.setTo(m_fPctleThreshold);
+    
 	// recenter bandpassed
 	RecenterImage(bp);
+    
 	// bpThresh is >= m_fPctleThreshold
-	max(bp, m_fPctleThreshold, bpThresh);
+	max(bp, m_fPctleThreshold, lm);
 
-	// Perform dilation, store in tmp
-	cv::dilate(bp, tmp, m_DilationKernel);
-
-	// subtract off initial bandpas from tmp, store in lm
-	cv::subtract(bp, tmp, lm);
+	// Perform dilation, do in place to reuse bpThresh
+	cv::dilate(lm, lm, m_DilationKernel);
+    
+	// subtract off initial bandpass from dilated, store in lm
+	cv::subtract(bp, lm, lm);
 
 	// exponentiate to exxagerate
 	cv::exp(lm, lm);
 
 	// threshold so that things close to 1 stay and all else goes
 	cv::threshold(lm, lm, 1 - kEPS, 1, cv::THRESH_BINARY);
+    
+    lm.convertTo(particles, CV_8U);
 }
 
 CenterFindEngine::Statistics::Statistics():
@@ -197,7 +203,8 @@ CenterFindEngine::Statistics::Statistics(int mask_radius, int feature_radius) :
 	int diameter = 2 * m_uMaskRadius + 1;
 
 	// Make host mats
-	cv::Mat h_Circ(cv::Size(diameter, diameter), 0.f, CV_32F);
+	cv::Mat h_Circ(cv::Size(diameter, diameter), CV_32F, 0.f);
+    
 	cv::Mat h_RX = h_Circ;
 	cv::Mat h_RY = h_Circ;
 	cv::Mat h_R2 = h_Circ;
@@ -236,6 +243,7 @@ CenterFindEngine::Statistics::Statistics(int mask_radius, int feature_radius) :
 CenterFindEngine::PMetricsVec CenterFindEngine::Statistics::GetMetrics(CenterFindEngine::Data& data) {
 	cv::UMat& input = data.m_InputImg;
 	cv::UMat& lm = data.m_LocalMaxImg;
+    lm.convertTo(lm, CV_32F);
 	
 	PMetricsVec ret;
 
@@ -248,6 +256,8 @@ CenterFindEngine::PMetricsVec CenterFindEngine::Statistics::GetMetrics(CenterFin
 	cv::Mat h_ParticleImg;
 	data.m_ParticleImg.copyTo(h_ParticleImg);
 
+    //std::cout << cv::countNonZero(h_ParticleImg) << std::endl;
+    
 	// TODO this has to be a kernel, so I'll lose most of the OCV niceties
 	for (int i = 0; i < sz.width; i++) {
 		for (int j = 0; j < sz.height; j++) {
@@ -269,7 +279,7 @@ CenterFindEngine::PMetricsVec CenterFindEngine::Statistics::GetMetrics(CenterFin
 				// If we have a particle, given that criteria
 				if (total_mass > 0.f) {
 					// Create the metrics struct
-					CenterFindEngine::ParticleMetrics pMet{ 0 };
+					CenterFindEngine::ParticleMetrics pMet;
 					pMet.idx = float(idx);
 					pMet.mass = total_mass;
 
@@ -301,12 +311,15 @@ CenterFindEngine::PMetricsVec CenterFindEngine::Statistics::GetMetrics(CenterFin
 }
 
 CenterFindEngine::CenterFindEngine(const CenterFindEngine::Parameters params) :
-m_Params(params)
+m_Params(params),
+m_fnBandPass(params.m_uFeatureRadius, params.m_fHWHMLength),
+m_fnLocalMax(params.m_uDilationRadius, params.m_fPctleThreshold),
+m_fnStatistics(params.m_uMaskRadius, params.m_uFeatureRadius)
 {
-	for (int i = m_Params.m_uStartOfStack; i < m_Params.m_uEndOfStack; i++) {
+	for (int i = m_Params.m_uStartFrame; i < m_Params.m_uEndFrame; i++) {
 		std::string fileName = m_Params.GetFileName(i);
 		FIMULTIBITMAP * FI_Input = FreeImage_OpenMultiBitmap(FIF_TIFF, fileName.c_str(), 0, 1, 1, TIFF_DEFAULT);
-		for (int j = m_Params.m_uStartFrame; j < m_Params.m_uEndFrame; j++)
+		for (int j = m_Params.m_uStartOfStack; j < m_Params.m_uEndOfStack; j++)
 			m_Images.emplace_back(FreeImage_LockPage(FI_Input, j - 1));
 		FreeImage_CloseMultiBitmap(FI_Input, TIFF_DEFAULT);
 	}
@@ -314,12 +327,15 @@ m_Params(params)
 
 std::deque<CenterFindEngine::PMetricsVec> CenterFindEngine::Execute() {
 	std::deque<PMetricsVec> ret;
+    int count(0);
 
 	for (auto& data : m_Images) {
-		m_fnBandPass.Execute(data);
+        m_fnBandPass.Execute(data);
 		m_fnLocalMax.Execute(data);
 
-		ret.emplace_back(m_fnStatistics.GetMetrics(data));
+        PMetricsVec pVec = m_fnStatistics.GetMetrics(data);
+        ret.push_back(pVec);
+        count++;
 	}
 
 	return ret;

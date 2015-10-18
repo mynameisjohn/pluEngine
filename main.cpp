@@ -7,15 +7,11 @@ int main(int argc, char ** argv) {
 	// Better be the right amount
 	if (argc != args.size() + 1)
 		return -1;
-    
-    
 
 	// Make them strings
 	for (int i=0; i < args.size(); i++)
 		args[i] = std::string(argv[i+1]);
     
-    for (int i=0; i<argc-1; i++)
-        std::cout << i << ", " << args[i] << std::endl;
 
 	// Construct parameters and engine
 	CenterFindEngine::Parameters params(args);
