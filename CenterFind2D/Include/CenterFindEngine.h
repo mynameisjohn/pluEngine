@@ -20,6 +20,14 @@ public:
 		EVERY_100,
 		LOG_COUNT
 	};
+    
+    struct Particle{
+        float x;
+        float y;
+        float z;
+        float i;
+        uint32_t stackCount;
+    };
 
 	union ParticleMetrics {
 		struct {
@@ -52,7 +60,7 @@ public:
 	public:
 		Parameters();
 		// Only constructor, which takes in argv
-		Parameters(std::array<std::string, 13> args);
+		Parameters(std::array<std::string, 15> args);
 
 		// General file name (without number)
 		// i.e CenterfindData_in, CenterFindData_out, .tiff
@@ -80,6 +88,10 @@ public:
 		// particle brightness threshold
 		float m_fHWHMLength;
 		float m_fPctleThreshold;
+        
+        // Particle finding params
+        uint32_t m_uMaxStackCount;
+        uint32_t m_uNeighborRadius;
 
 		// Various printing modes
 		std::set<OutputMode> m_setOutputMode;
@@ -133,20 +145,23 @@ public:
 		cv::UMat m_DilationKernel;
 	};
 
-	// Statistics
-	class Statistics {
+	// Particle Finder
+	class ParticleFinder {
 	public:
-		Statistics();
-		Statistics(int mask_radius, int feature_radius);
-		PMetricsVec GetMetrics(Data& data);
+		ParticleFinder();
+		ParticleFinder(int mask_radius, int feature_radius, int sc, int nr);
+		uint32_t FindParticles(Data& data);
+        std::vector<Particle> GetFoundParticles();
 	private:
 		uint32_t m_uMaskRadius;
 		uint32_t m_uFeatureRadius;
+        uint32_t m_uMaxStackCount;
+        uint32_t m_uNeighborRadius;
 		cv::UMat m_CircleMask;
 		cv::UMat m_RadXKernel; 
 		cv::UMat m_RadYKernel;
 		cv::UMat m_RadSqKernel;
-		PMetricsVec m_Metrics;
+        std::vector<Particle> m_vFoundParticles;
 	};
 
 	// Now to the actual CenterFindEngine class
@@ -155,11 +170,11 @@ private:
 	std::vector<Data> m_Images;
 	BandPass m_fnBandPass;
 	LocalMax m_fnLocalMax;
-	Statistics m_fnStatistics;
+	ParticleFinder m_fnParticleFinder;
 
 public:
 	CenterFindEngine(const CenterFindEngine::Parameters params);
-	std::deque<PMetricsVec> Execute();
+    std::vector<Particle> Execute();
 };
 //
 //#include <vector>

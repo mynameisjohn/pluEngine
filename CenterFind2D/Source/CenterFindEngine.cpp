@@ -38,10 +38,12 @@ CenterFindEngine::Parameters::Parameters() :
 	m_uDilationRadius(0),
 	m_uMaskRadius(0),
 	m_fHWHMLength(0),
-	m_fPctleThreshold(0)
+	m_fPctleThreshold(0),
+    m_uMaxStackCount(0),
+    m_uNeighborRadius(0)
 {}
 
-CenterFindEngine::Parameters::Parameters(std::array<std::string, 13> args){
+CenterFindEngine::Parameters::Parameters(std::array<std::string, 15> args){
 	uint32_t idx(0);
     m_strImgDir = args[idx++];
     char buf[2048];
@@ -61,6 +63,8 @@ CenterFindEngine::Parameters::Parameters(std::array<std::string, 13> args){
 	std::stringstream(args[idx++]) >> m_uMaskRadius;
 	std::stringstream(args[idx++]) >> m_fHWHMLength;
 	std::stringstream(args[idx++]) >> m_fPctleThreshold;
+    std::stringstream(args[idx++]) >> m_uMaxStackCount;
+    std::stringstream(args[idx++]) >> m_uNeighborRadius;
 	m_setOutputMode = { OutputMode::TEXT };
 }
 
@@ -190,14 +194,16 @@ void CenterFindEngine::LocalMax::Execute(CenterFindEngine::Data& data) {
     lm.convertTo(particles, CV_8U);
 }
 
-CenterFindEngine::Statistics::Statistics():
+CenterFindEngine::ParticleFinder::ParticleFinder():
 	m_uMaskRadius(0),
 	m_uFeatureRadius(0)
 {}
 
-CenterFindEngine::Statistics::Statistics(int mask_radius, int feature_radius) :
+CenterFindEngine::ParticleFinder::ParticleFinder(int mask_radius, int feature_radius, int sc, int nr) :
 	m_uMaskRadius(mask_radius),
-	m_uFeatureRadius(feature_radius)
+	m_uFeatureRadius(feature_radius),
+    m_uMaxStackCount(sc),
+    m_uNeighborRadius(nr)
 {
 	// circle diameter
 	int diameter = 2 * m_uMaskRadius + 1;
@@ -240,7 +246,11 @@ CenterFindEngine::Statistics::Statistics(int mask_radius, int feature_radius) :
 	h_R2.copyTo(m_RadSqKernel);
 }
 
-CenterFindEngine::PMetricsVec CenterFindEngine::Statistics::GetMetrics(CenterFindEngine::Data& data) {
+std::vector<CenterFindEngine::Particle> CenterFindEngine::ParticleFinder::GetFoundParticles(){
+    return m_vFoundParticles;
+}
+
+uint32_t CenterFindEngine::ParticleFinder::FindParticles(CenterFindEngine::Data& data) {
 	cv::UMat& input = data.m_InputImg;
 	cv::UMat& lm = data.m_LocalMaxImg;
     lm.convertTo(lm, CV_32F);
@@ -299,22 +309,48 @@ CenterFindEngine::PMetricsVec CenterFindEngine::Statistics::GetMetrics(CenterFin
 					// offset + index
 					pMet.x_val = pMet.x_offset + float(i);
 					pMet.y_val = pMet.y_offset + float(j);
+                    
+                    // See if this particle matches any of the previously found particles
+                    bool foundMatch(false);
+                    for (auto& p : m_vFoundParticles){
+                        // We don't want too many stacks contributing to one particle
+                        if (p.stackCount < 50){
+                            float dX = pMet.x_val - p.x / float(p.stackCount);
+                            float dY = pMet.y_val - p.y / float(p.stackCount);
+                            float r = pow(dX, 2) + pow(dY, 2);
+                            //std::cout << r << std::endl;
+                            // If it's decently close...
+                            if (r < 5000.f){
+                                foundMatch = true;
+                                p.stackCount++;
+                                p.x += pMet.x_val ;
+                                p.y += pMet.y_val;
+                                break; // not sure about this
+                            }
+                        }
+                    }
+                    // If we couldn't match it to a prevously found particle,
+                    // make a new one and check future particles against it
+                    if (foundMatch == false){
+                        Particle nParticle = {pMet.x_val, pMet.y_val, 0.f, total_mass, 1};
+                        m_vFoundParticles.push_back(nParticle);
+                    }
 
 					// Store each found particle in our return vector
-					ret.push_back(pMet);
+					// ret.push_back(pMet);
 				}
 			}
 		}
 	}
 
-	return ret;
+	return m_vFoundParticles.size();
 }
 
 CenterFindEngine::CenterFindEngine(const CenterFindEngine::Parameters params) :
 m_Params(params),
 m_fnBandPass(params.m_uFeatureRadius, params.m_fHWHMLength),
 m_fnLocalMax(params.m_uDilationRadius, params.m_fPctleThreshold),
-m_fnStatistics(params.m_uMaskRadius, params.m_uFeatureRadius)
+m_fnParticleFinder(params.m_uMaskRadius, params.m_uFeatureRadius, params.m_uMaxStackCount, params.m_uNeighborRadius)
 {
 	for (int i = m_Params.m_uStartFrame; i < m_Params.m_uEndFrame; i++) {
 		std::string fileName = m_Params.GetFileName(i);
@@ -325,20 +361,15 @@ m_fnStatistics(params.m_uMaskRadius, params.m_uFeatureRadius)
 	}
 }
 
-std::deque<CenterFindEngine::PMetricsVec> CenterFindEngine::Execute() {
-	std::deque<PMetricsVec> ret;
-    int count(0);
-
-	for (auto& data : m_Images) {
+std::vector<CenterFindEngine::Particle> CenterFindEngine::Execute() {
+    for (auto& data : m_Images) {
         m_fnBandPass.Execute(data);
 		m_fnLocalMax.Execute(data);
-
-        PMetricsVec pVec = m_fnStatistics.GetMetrics(data);
-        ret.push_back(pVec);
-        count++;
+        
+        uint32_t count = m_fnParticleFinder.FindParticles(data);
 	}
 
-	return ret;
+    return m_fnParticleFinder.GetFoundParticles();
 }
 
 //

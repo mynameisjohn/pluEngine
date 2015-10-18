@@ -2,7 +2,7 @@
 
 int main(int argc, char ** argv) {
 	// Convert program args to CenterFind arguments
-	std::array<std::string, 13> args;
+	std::array<std::string, 15> args;
 
 	// Better be the right amount
 	if (argc != args.size() + 1)
@@ -18,7 +18,7 @@ int main(int argc, char ** argv) {
 	CenterFindEngine cF(params);
 
 	// Execute engine, get results
-	std::deque<CenterFindEngine::PMetricsVec> results = cF.Execute();
+	std::vector<CenterFindEngine::Particle> particles = cF.Execute();
 
 	// Send this to the input of link3Dt (or whatever comes next)
 
