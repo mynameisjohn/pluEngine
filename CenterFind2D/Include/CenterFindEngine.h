@@ -91,7 +91,7 @@ public:
         
         // Particle finding params
         uint32_t m_uMaxStackCount;
-        uint32_t m_uNeighborRadius;
+        float m_fNeighborRadius;
 
 		// Various printing modes
 		std::set<OutputMode> m_setOutputMode;
@@ -149,14 +149,14 @@ public:
 	class ParticleFinder {
 	public:
 		ParticleFinder();
-		ParticleFinder(int mask_radius, int feature_radius, int sc, int nr);
+		ParticleFinder(int mask_radius, int feature_radius, int sc, float nr);
 		uint32_t FindParticles(Data& data);
         std::vector<Particle> GetFoundParticles();
 	private:
 		uint32_t m_uMaskRadius;
 		uint32_t m_uFeatureRadius;
         uint32_t m_uMaxStackCount;
-        uint32_t m_uNeighborRadius;
+        float m_fNeighborRadius;
 		cv::UMat m_CircleMask;
 		cv::UMat m_RadXKernel; 
 		cv::UMat m_RadYKernel;

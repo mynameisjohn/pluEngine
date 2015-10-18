@@ -40,7 +40,7 @@ CenterFindEngine::Parameters::Parameters() :
 	m_fHWHMLength(0),
 	m_fPctleThreshold(0),
     m_uMaxStackCount(0),
-    m_uNeighborRadius(0)
+    m_fNeighborRadius(0)
 {}
 
 CenterFindEngine::Parameters::Parameters(std::array<std::string, 15> args){
@@ -64,7 +64,7 @@ CenterFindEngine::Parameters::Parameters(std::array<std::string, 15> args){
 	std::stringstream(args[idx++]) >> m_fHWHMLength;
 	std::stringstream(args[idx++]) >> m_fPctleThreshold;
     std::stringstream(args[idx++]) >> m_uMaxStackCount;
-    std::stringstream(args[idx++]) >> m_uNeighborRadius;
+    std::stringstream(args[idx++]) >> m_fNeighborRadius;
 	m_setOutputMode = { OutputMode::TEXT };
 }
 
@@ -199,11 +199,11 @@ CenterFindEngine::ParticleFinder::ParticleFinder():
 	m_uFeatureRadius(0)
 {}
 
-CenterFindEngine::ParticleFinder::ParticleFinder(int mask_radius, int feature_radius, int sc, int nr) :
+CenterFindEngine::ParticleFinder::ParticleFinder(int mask_radius, int feature_radius, int sc, float nr) :
 	m_uMaskRadius(mask_radius),
 	m_uFeatureRadius(feature_radius),
     m_uMaxStackCount(sc),
-    m_uNeighborRadius(nr)
+    m_fNeighborRadius(nr)
 {
 	// circle diameter
 	int diameter = 2 * m_uMaskRadius + 1;
@@ -314,13 +314,13 @@ uint32_t CenterFindEngine::ParticleFinder::FindParticles(CenterFindEngine::Data&
                     bool foundMatch(false);
                     for (auto& p : m_vFoundParticles){
                         // We don't want too many stacks contributing to one particle
-                        if (p.stackCount < 50){
+                        if (p.stackCount < m_uMaxStackCount){
                             float dX = pMet.x_val - p.x / float(p.stackCount);
                             float dY = pMet.y_val - p.y / float(p.stackCount);
                             float r = pow(dX, 2) + pow(dY, 2);
                             //std::cout << r << std::endl;
                             // If it's decently close...
-                            if (r < 5000.f){
+                            if (r < m_fNeighborRadius){
                                 foundMatch = true;
                                 p.stackCount++;
                                 p.x += pMet.x_val ;
@@ -350,7 +350,7 @@ CenterFindEngine::CenterFindEngine(const CenterFindEngine::Parameters params) :
 m_Params(params),
 m_fnBandPass(params.m_uFeatureRadius, params.m_fHWHMLength),
 m_fnLocalMax(params.m_uDilationRadius, params.m_fPctleThreshold),
-m_fnParticleFinder(params.m_uMaskRadius, params.m_uFeatureRadius, params.m_uMaxStackCount, params.m_uNeighborRadius)
+m_fnParticleFinder(params.m_uMaskRadius, params.m_uFeatureRadius, params.m_uMaxStackCount, params.m_fNeighborRadius)
 {
 	for (int i = m_Params.m_uStartFrame; i < m_Params.m_uEndFrame; i++) {
 		std::string fileName = m_Params.GetFileName(i);
