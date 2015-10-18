@@ -41,8 +41,13 @@ CenterFindEngine::Parameters::Parameters() :
 	m_fPctleThreshold(0)
 {}
 
-CenterFindEngine::Parameters::Parameters(std::array<std::string, 12> args){
+CenterFindEngine::Parameters::Parameters(std::array<std::string, 13> args){
 	uint32_t idx(0);
+    m_strImgDir = args[idx++];
+    char buf[2048];
+    realpath(m_strImgDir.c_str(), &buf[0]);
+    m_strImgDir = std::string(buf);
+    
 	m_strInputStem = args[idx++];
 	m_strOutputStem = args[idx++];
 	m_strFileExt = ".tif";
@@ -67,7 +72,8 @@ std::string CenterFindEngine::Parameters::GetFileName(uint32_t idx) {
 	std::string num = std::to_string(idx);
 	while (num.length() < m_uFileNamePad)
 		num = std::string("0").append(num);
-	return m_strInputStem + "_" + num + m_strFileExt;
+    
+    return m_strImgDir + "/" + m_strInputStem + "_" + num + m_strFileExt;
 }
 
 CenterFindEngine::Data::Data(FIBITMAP * bmp) {

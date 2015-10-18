@@ -52,11 +52,12 @@ public:
 	public:
 		Parameters();
 		// Only constructor, which takes in argv
-		Parameters(std::array<std::string, 12> args);
+		Parameters(std::array<std::string, 13> args);
 
 		// General file name (without number)
 		// i.e CenterfindData_in, CenterFindData_out, .tiff
-		std::string m_strInputStem;
+		std::string m_strImgDir;
+        std::string m_strInputStem;
 		std::string m_strOutputStem;
 		std::string m_strFileExt;
 		uint32_t m_uFileNamePad;

@@ -2,7 +2,7 @@
 
 int main(int argc, char ** argv) {
 	// Convert program args to CenterFind arguments
-	std::array<std::string, 12> args;
+	std::array<std::string, 13> args;
 
 	// Better be the right amount
 	if (argc != args.size() + 1)
