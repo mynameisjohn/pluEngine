@@ -63,6 +63,7 @@ CenterFindEngine::Parameters::Parameters(std::array<std::string, 15> args){
 	std::stringstream(args[idx++]) >> m_uMaskRadius;
 	std::stringstream(args[idx++]) >> m_fHWHMLength;
 	std::stringstream(args[idx++]) >> m_fPctleThreshold;
+    idx++; // wtf?
     std::stringstream(args[idx++]) >> m_uMaxStackCount;
     std::stringstream(args[idx++]) >> m_fNeighborRadius;
 	m_setOutputMode = { OutputMode::TEXT };
@@ -246,21 +247,93 @@ CenterFindEngine::ParticleFinder::ParticleFinder(int mask_radius, int feature_ra
 	h_R2.copyTo(m_RadSqKernel);
 }
 
+// Refine particle stacks, create new particles
 std::vector<CenterFindEngine::Particle> CenterFindEngine::ParticleFinder::GetFoundParticles(){
-    return m_vFoundParticles;
+    // The vector may resize here; is that OK?
+    // Otherwise put them into a new container and recombine
+    
+    std::vector<Particle> ret(m_vFoundParticles.size());
+    auto it = m_vFoundParticles.begin();
+    for (auto& pStack : m_vFoundParticles)
+        *it++ = pStack.GetRefinedParticle();
+    
+    return ret;
+    
+//    // First step; see if too mayn particles contribute to a given stack
+//    for (int i=0; i<m_vFoundParticles.size(); i++){
+//        // As a first pass, check the stack count; if it exceeds the maximum,
+//        // then split the stack into two particles; repeat as necessary
+//        Particle& p = m_vFoundParticles[i];
+//        if (p.stackCount > m_uMaxStackCount){
+//            Particle nP = p;
+//            p.stackCount = p.stackCount - m_uMaxStackCount;
+//            p.stackCount = m_uMaxStackCount;
+//            m_vFoundParticles.push_back(nP);
+//        }
+//    }
+//    
+//    // Second step; check intensity derivative; if there is an increase following
+//    // a period of decrease (the intensity was going down, and now it's going up),
+//    // then we say it's a new particle (we are iterating through the depth axis)
+//    for (int i=0; i<m_vFoundParticles.size(); i++){
+//        
+//    }
+//    
+//    return m_vFoundParticles;
+}
+
+CenterFindEngine::ParticleStack::ParticleStack(Particle p):
+    uParticleCount(1),
+    fMaxPeak(p.i),
+    lContributingParticles({p})
+{}
+
+float CenterFindEngine::ParticleStack::GetPeak() const{
+    return fMaxPeak;
+}
+
+CenterFindEngine::Particle CenterFindEngine::ParticleStack::GetLastParticleAdded() const{
+    return lContributingParticles.back();
+}
+
+uint32_t CenterFindEngine::ParticleStack::GetParticleCount() const{
+    return uParticleCount;
+}
+
+void CenterFindEngine::ParticleStack::AddParticle(CenterFindEngine::Particle p){
+    if (p.i > fMaxPeak)
+        fMaxPeak = p.i;
+    uParticleCount++;
+    lContributingParticles.push_back(p);
+}
+
+CenterFindEngine::Particle CenterFindEngine::ParticleStack::GetRefinedParticle() const{
+    Particle ret{0};
+    float denom = 1.f / float(uParticleCount);
+    for (auto& p : lContributingParticles){
+        ret.x += p.x * denom;
+        ret.y += p.y * denom;
+    }
+    
+    ret.i = fMaxPeak;
+    
+    return ret;
 }
 
 uint32_t CenterFindEngine::ParticleFinder::FindParticles(CenterFindEngine::Data& data) {
 	cv::UMat& input = data.m_InputImg;
 	cv::UMat& lm = data.m_LocalMaxImg;
     lm.convertTo(lm, CV_32F);
-	
-	PMetricsVec ret;
 
+    // For each pixel p(i,j), we sum all the pixels surrounding
+    // p between p(i-border,j-border) and p(i+border, j+border)
 	int border = m_uFeatureRadius;
 	cv::Size sz = input.size();
-	cv::Rect AOI(border, border, sz.width - 2 * border, sz.height - 2 * border);
 	int diameter = m_uMaskRadius * 2 + 1;
+    
+    // Construct an Area of Interest only containing pixels
+    // far enough in the image to count
+    cv::Rect AOI(border, border, sz.width - 2 * border, sz.height - 2 * border);
 
 	// Until I have a kernel...
 	cv::Mat h_ParticleImg;
@@ -269,6 +342,7 @@ uint32_t CenterFindEngine::ParticleFinder::FindParticles(CenterFindEngine::Data&
     //std::cout << cv::countNonZero(h_ParticleImg) << std::endl;
     
 	// TODO this has to be a kernel, so I'll lose most of the OCV niceties
+    // Also, can I start the loop at border and end at len - border?
 	for (int i = 0; i < sz.width; i++) {
 		for (int j = 0; j < sz.height; j++) {
 			int idx = i*sz.width + j;
@@ -289,59 +363,68 @@ uint32_t CenterFindEngine::ParticleFinder::FindParticles(CenterFindEngine::Data&
 				// If we have a particle, given that criteria
 				if (total_mass > 0.f) {
 					// Create the metrics struct
-					CenterFindEngine::ParticleMetrics pMet;
-					pMet.idx = float(idx);
-					pMet.mass = total_mass;
+					//CenterFindEngine::ParticleMetrics pMet;
+//					pMet.idx = float(idx);
+//					pMet.mass = total_mass;
 
 					// Sum local bool region 
 					cv::UMat m_Square = data.m_ParticleImg(extract);
-					pMet.multiplicity = cv::sum(m_Square)[0];
+					float multiplicity = cv::sum(m_Square)[0];
 
 					// Lambda to get x, y, r2 offset using Statistics kernels
 					auto getOffset = [&product, &e_Square, total_mass](cv::UMat& K) {
 						cv::multiply(e_Square, K, product);
 						return ((cv::sum(product)[0]) / total_mass);
 					};					
-					pMet.x_offset = getOffset(m_RadXKernel) - (mask + 1);
-					pMet.y_offset = getOffset(m_RadYKernel) - (mask + 1);
-					pMet.r2_val = getOffset(m_RadSqKernel);
+					float x_offset = getOffset(m_RadXKernel) - (mask + 1);
+					float y_offset = getOffset(m_RadYKernel) - (mask + 1);
+					float r2_val = getOffset(m_RadSqKernel);
 
 					// offset + index
-					pMet.x_val = pMet.x_offset + float(i);
-					pMet.y_val = pMet.y_offset + float(j);
+					float x_val = x_offset + float(i);
+					float y_val = y_offset + float(j);
                     
                     // See if this particle matches any of the previously found particles
-                    bool foundMatch(false);
-                    for (auto& p : m_vFoundParticles){
+                    ParticleStack * matchStack = nullptr;
+                    for (auto& pStack : m_vFoundParticles){
                         // We don't want too many stacks contributing to one particle
-                        if (p.stackCount < m_uMaxStackCount){
-                            float dX = pMet.x_val - p.x / float(p.stackCount);
-                            float dY = pMet.y_val - p.y / float(p.stackCount);
+                        if (pStack.GetParticleCount() < m_uMaxStackCount){
+                            // We want the contributing particle in the previous slice
+                            // (what if it doesn't exist? I'm just going to ask for the top)
+                            Particle prev = pStack.GetLastParticleAdded();
+                            
+                            // See if it's reasonably close to the last particle added
+                            // Another alternative here is to keep a running average
+                            // of the particle location in a stack (in xy) and check
+                            // the distance from that. Not sure what's the better option
+                            float dX = prev.x - x_val;
+                            float dY = prev.y - y_val;
                             float r = pow(dX, 2) + pow(dY, 2);
-                            //std::cout << r << std::endl;
-                            // If it's decently close...
                             if (r < m_fNeighborRadius){
-                                foundMatch = true;
-                                p.stackCount++;
-                                p.x += pMet.x_val ;
-                                p.y += pMet.y_val;
-                                break; // not sure about this
+                                // Check continuity in the z direction
+                                bool isChanging = prev.i < total_mass;
+                                bool isFar = fabs(pStack.GetPeak() - total_mass) < 10.f; // bullshit
+                                
+                                // If the intensity dir changes and it's far from the peak
+                                if (isChanging && !isFar){
+                                    matchStack = &pStack;
+                                }
                             }
                         }
+                        
+                        Particle p = {x_val, y_val, total_mass};
+                        
+                        if (matchStack){
+                            matchStack->AddParticle(p);
+                        }
+                        else{
+                            m_vFoundParticles.emplace_back(p);
+                        }
                     }
-                    // If we couldn't match it to a prevously found particle,
-                    // make a new one and check future particles against it
-                    if (foundMatch == false){
-                        Particle nParticle = {pMet.x_val, pMet.y_val, 0.f, total_mass, 1};
-                        m_vFoundParticles.push_back(nParticle);
-                    }
-
-					// Store each found particle in our return vector
-					// ret.push_back(pMet);
-				}
-			}
-		}
-	}
+                }
+            }
+        }
+    }
 
 	return m_vFoundParticles.size();
 }
@@ -362,11 +445,13 @@ m_fnParticleFinder(params.m_uMaskRadius, params.m_uFeatureRadius, params.m_uMaxS
 }
 
 std::vector<CenterFindEngine::Particle> CenterFindEngine::Execute() {
+    int i(0);
     for (auto& data : m_Images) {
         m_fnBandPass.Execute(data);
 		m_fnLocalMax.Execute(data);
         
         uint32_t count = m_fnParticleFinder.FindParticles(data);
+        std::cout << count << ", " << i++ << std::endl;
 	}
 
     return m_fnParticleFinder.GetFoundParticles();

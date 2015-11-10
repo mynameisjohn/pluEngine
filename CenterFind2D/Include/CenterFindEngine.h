@@ -8,6 +8,7 @@
 #include <array>
 #include <vector>
 #include <deque>
+#include <list>
 
 #include <stdint.h>
 
@@ -24,27 +25,38 @@ public:
     struct Particle{
         float x;
         float y;
-        float z;
         float i;
-        uint32_t stackCount;
+    };
+    
+    class ParticleStack{
+        uint32_t uParticleCount;
+        float fMaxPeak;
+        std::list<Particle> lContributingParticles;
+    public:
+        ParticleStack(Particle first);
+        void AddParticle(Particle p);
+        Particle GetRefinedParticle() const;
+        uint32_t GetParticleCount() const;
+        Particle GetLastParticleAdded() const;
+        float GetPeak() const;
     };
 
-	union ParticleMetrics {
-		struct {
-			float idx;
-			float x_val;
-			float y_val;
-			float r2_val;
-			float x_offset;
-			float y_offset;
-			float mass;
-			float multiplicity;
-		};
-		float data[8];
-		float& operator[](uint32_t idx) {
-			return data[idx];
-		}
-	};
+//	union ParticleMetrics {
+//		struct {
+//			float idx;
+//			float x_val;
+//			float y_val;
+//			float r2_val;
+//			float x_offset;
+//			float y_offset;
+//			float mass;
+//			float multiplicity;
+//		};
+//		float data[8];
+//		float& operator[](uint32_t idx) {
+//			return data[idx];
+//		}
+//	};
 
 	//struct ParticleMetrics {
 	//	union{
@@ -54,7 +66,7 @@ public:
 	//};
 
 	//using ParticleMetrics = std::array<float, 8>;
-	using PMetricsVec = std::vector<ParticleMetrics>;
+	//using PMetricsVec = std::vector<ParticleMetrics>;
 
 	class Parameters {
 	public:
@@ -108,7 +120,6 @@ public:
 		cv::UMat m_ThresholdImg;  // Thresholded Bypass result
 		cv::UMat m_LocalMaxImg;   // The local maximum image
 		cv::UMat m_ParticleImg;   // The boolean image of particle locations
-		PMetricsVec m_Data;       // The vector of particle data
 	public:
 		Data(FIBITMAP * bmp);
 	};
@@ -130,7 +141,6 @@ public:
 		uint32_t m_uGaussianRadius;
 		cv::UMat m_GaussKernel;
 		cv::UMat m_CircleMask;
-
 	};
 
 	// Local maximum
@@ -161,7 +171,7 @@ public:
 		cv::UMat m_RadXKernel; 
 		cv::UMat m_RadYKernel;
 		cv::UMat m_RadSqKernel;
-        std::vector<Particle> m_vFoundParticles;
+        std::vector<ParticleStack> m_vFoundParticles;
 	};
 
 	// Now to the actual CenterFindEngine class
