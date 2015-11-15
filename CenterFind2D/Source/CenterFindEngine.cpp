@@ -344,8 +344,8 @@ uint32_t CenterFindEngine::ParticleFinder::FindParticles(CenterFindEngine::Data&
 	int diameter = m_uMaskRadius * 2 + 1;
     
     // Construct an Area of Interest only containing pixels
-    // far enough in the image to count
-    cv::Rect AOI(border, border, sz.width - border, sz.height - border);
+    // far enough in the image to count (img.width - 2*border == AOI.width)
+    cv::Rect AOI(border, border, sz.width - 2 * border, sz.height - 2 *border);
 
 	// Until I have a kernel...
 	cv::Mat h_ParticleImg;
@@ -476,7 +476,7 @@ std::vector<CenterFindEngine::Particle> CenterFindEngine::Execute() {
         
         // Find particle centers
         uint32_t count = m_fnParticleFinder.FindParticles(data);
-        std::cout << count << ", " << i++ << std::endl;
+        //std::cout << count << ", " << i++ << std::endl;
 	}
 
     // Convert particle centers into particle locations, return
