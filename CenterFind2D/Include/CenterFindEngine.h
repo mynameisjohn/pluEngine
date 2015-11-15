@@ -57,15 +57,17 @@ public:
     
     class ParticleStack{
         uint32_t uParticleCount;
+        uint32_t uLastSliceIdx;
         float fMaxPeak;
         std::list<Particle> lContributingParticles;
     public:
-        ParticleStack(Particle first);
-        void AddParticle(Particle p);
+        ParticleStack(Particle first, uint32_t slice);
+        void AddParticle(Particle p, uint32_t slice);
         Particle GetRefinedParticle() const;
         uint32_t GetParticleCount() const;
         Particle GetLastParticleAdded() const;
         float GetPeak() const;
+        uint32_t GetLastSliceIdx() const;
     };
 
 //	union ParticleMetrics {
@@ -142,13 +144,14 @@ public:
 
 	// The mat declarations represent a basic signal flow
 	struct Data {
+        uint32_t m_uSliceIdx;
 		cv::UMat m_InputImg;      // The input image
 		cv::UMat m_FilteredImg;   // Filtered result
 		cv::UMat m_ThresholdImg;  // Thresholded filtered result
 		cv::UMat m_LocalMaxImg;   // The local maximum image
 		cv::UMat m_ParticleImg;   // The boolean image of particle locations
 	public:
-		Data(FIBITMAP * bmp);
+		Data(FIBITMAP * bmp, uint32_t sliceIdx);
 	};
 
 	// The operators, could be chained

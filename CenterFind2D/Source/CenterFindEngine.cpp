@@ -93,7 +93,9 @@ std::string CenterFindEngine::Parameters::GetFileName(uint32_t idx) {
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // CenterFindEngine::Data functions
 
-CenterFindEngine::Data::Data(FIBITMAP * bmp) {
+CenterFindEngine::Data::Data(FIBITMAP * bmp, uint32_t slice):
+    m_uSliceIdx(slice)
+{
 	cv::Mat image = cv::Mat::zeros(FreeImage_GetWidth(bmp), FreeImage_GetHeight(bmp), CV_8UC3);
 	
 	FreeImage_ConvertToRawBits(image.data, bmp, image.step, 24, 0xFF, 0xFF, 0xFF, true);
@@ -288,8 +290,9 @@ std::vector<CenterFindEngine::Particle> CenterFindEngine::ParticleFinder::GetFou
 // CenterFindEngine::ParticleStack functions
 
 // Particle Stack initializing constructor
-CenterFindEngine::ParticleStack::ParticleStack(Particle p):
+CenterFindEngine::ParticleStack::ParticleStack(Particle p, uint32_t slice):
     uParticleCount(1),
+    uLastSliceIdx(slice),
     fMaxPeak(p.i),
     lContributingParticles({p})
 {}
@@ -304,17 +307,23 @@ CenterFindEngine::Particle CenterFindEngine::ParticleStack::GetLastParticleAdded
     return lContributingParticles.back();
 }
 
+// Keep track of slice idx for last particle added
+uint32_t CenterFindEngine::ParticleStack::GetLastSliceIdx() const{
+    return uLastSliceIdx;
+}
+
 // Gets the total # of particles contributing to this stack
 uint32_t CenterFindEngine::ParticleStack::GetParticleCount() const{
     return uParticleCount;
 }
 
 // add a particle to the stack, updating things as necessary
-void CenterFindEngine::ParticleStack::AddParticle(CenterFindEngine::Particle p){
+void CenterFindEngine::ParticleStack::AddParticle(CenterFindEngine::Particle p, uint32_t slice){
     if (p.i > fMaxPeak)
         fMaxPeak = p.i;
     uParticleCount++;
     lContributingParticles.push_back(p);
+    uLastSliceIdx = std::max(uLastSliceIdx, slice); // max?
 }
 
 // Combine all particles contributing to this stack into one refined particle
@@ -336,6 +345,10 @@ uint32_t CenterFindEngine::ParticleFinder::FindParticles(CenterFindEngine::Data&
 	cv::UMat& input = data.m_InputImg;
 	cv::UMat& lm = data.m_LocalMaxImg;
     lm.convertTo(lm, CV_32F);
+    
+//    ShowImage(input);
+//    ShowImage(data.m_FilteredImg);
+//    ShowImage(data.m_LocalMaxImg);
 
     // For each pixel p(i,j), we sum all the pixels surrounding
     // p between p(i-border,j-border) and p(i+border, j+border)
@@ -396,9 +409,17 @@ uint32_t CenterFindEngine::ParticleFinder::FindParticles(CenterFindEngine::Data&
                     // See if this particle matches any of the previously found particles
                     ParticleStack * matchStack = nullptr;
                     
-                    for (auto& pStack : m_vFoundParticles){
+                    // Iterate in reverse from the last particle added; we only care about particles in the previous slice
+                    for (auto rItStack = m_vFoundParticles.rbegin(); rItStack != m_vFoundParticles.rend(); ++rItStack){
+                        ParticleStack& pStack = *rItStack;
+                        
+                        // Break if the reverse iterator has run out of particles from the previous stack
+                        if (pStack.GetLastSliceIdx() < data.m_uSliceIdx - 1)
+                            break;
+                        
                         // We don't want too many stacks contributing to one particle
-                        if (pStack.GetParticleCount() < m_uMaxStackCount){
+                        if (pStack.GetParticleCount() < m_uMaxStackCount)
+                        {
                             // We want the contributing particle in the previous slice
                             // (what if it doesn't exist? I'm just going to ask for the top)
                             Particle prev = pStack.GetLastParticleAdded();
@@ -409,33 +430,36 @@ uint32_t CenterFindEngine::ParticleFinder::FindParticles(CenterFindEngine::Data&
                             // the distance from that. Not sure what's the better option
                             float dX = prev.x - x_val;
                             float dY = prev.y - y_val;
-                            float r = pow(dX, 2) + pow(dY, 2);
-                            if (r < m_fNeighborRadius){
+                            float r = powf(dX, 2) + powf(dY, 2);
+                            if (r < powf(m_fNeighborRadius, 2))
+                            {
                                 // Check continuity in the z direction
                                 bool isChanging = prev.i < total_mass;
-                                bool isFar = fabs(pStack.GetPeak() - total_mass) < 10.f; // bullshit
+                                float diff = fabs(pStack.GetPeak() - total_mass);
+                                bool isFar = diff > 1000.f; // bullshit
                                 
                                 // If the intensity dir changes and it's far from the peak
-                                if (isChanging && !isFar){
+                                if (!isChanging){// && !isFar){
                                     matchStack = &pStack;
+                                    break;
                                 }
                             }
                         }
-                        
-                        // Construct particle, either add to existing stack or make new stack
-                        Particle p = {x_val, y_val, total_mass};
-                        if (matchStack){
-                            matchStack->AddParticle(p);
-                        }
-                        else{
-                            m_vFoundParticles.emplace_back(p);
-                        }
+                    }
+                    
+                    // Construct particle, either add to existing stack or make new stack
+                    Particle p = {x_val, y_val, total_mass};
+                    if (matchStack){
+                        matchStack->AddParticle(p, data.m_uSliceIdx);
+                    }
+                    else{
+                        m_vFoundParticles.emplace_back(p, data.m_uSliceIdx);
                     }
                 }
             }
         }
     }
-
+    
 	return m_vFoundParticles.size();
 }
 
@@ -450,14 +474,16 @@ CenterFindEngine::CenterFindEngine(const CenterFindEngine::Parameters params) :
     m_fnParticleFinder(params.m_uMaskRadius, params.m_uFeatureRadius, params.m_uMaxStackCount, params.m_fNeighborRadius)
 {
     // Read in the tiff stacks specified by params
+    uint32_t sliceIdx(0);
 	for (int i = m_Params.m_uStartFrame; i < m_Params.m_uEndFrame; i++) {
         // Get tiff stack file name
 		std::string fileName = m_Params.GetFileName(i);
 		FIMULTIBITMAP * FI_Input = FreeImage_OpenMultiBitmap(FIF_TIFF, fileName.c_str(), 0, 1, 1, TIFF_DEFAULT);
         
         // Iterate through tiff stack, generate Data Image
-		for (int j = m_Params.m_uStartOfStack; j < m_Params.m_uEndOfStack; j++)
-			m_Images.emplace_back(FreeImage_LockPage(FI_Input, j - 1));
+        for (int j = m_Params.m_uStartOfStack; j < m_Params.m_uEndOfStack; j++)
+			m_Images.emplace_back(FreeImage_LockPage(FI_Input, j - 1), sliceIdx++);
+        
         
         // Free image
 		FreeImage_CloseMultiBitmap(FI_Input, TIFF_DEFAULT);
@@ -476,7 +502,7 @@ std::vector<CenterFindEngine::Particle> CenterFindEngine::Execute() {
         
         // Find particle centers
         uint32_t count = m_fnParticleFinder.FindParticles(data);
-        //std::cout << count << ", " << i++ << std::endl;
+        std::cout << count << ", " << i++ << std::endl;
 	}
 
     // Convert particle centers into particle locations, return
