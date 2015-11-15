@@ -12,6 +12,33 @@
 
 #include <stdint.h>
 
+class CFEngine{
+    
+};
+
+struct CFParticle{
+    
+};
+
+class CFParticleStack{
+    
+};
+
+class CFBandPass{
+    
+};
+
+class CFLocalMax{
+    
+};
+
+class CFRefiner{
+    enum class MODE{
+        AVG,
+        LAST
+    };
+};
+
 class CenterFindEngine
 {
 public:
@@ -116,15 +143,15 @@ public:
 	// The mat declarations represent a basic signal flow
 	struct Data {
 		cv::UMat m_InputImg;      // The input image
-		cv::UMat m_BypassedImg;   // Bypass result
-		cv::UMat m_ThresholdImg;  // Thresholded Bypass result
+		cv::UMat m_FilteredImg;   // Filtered result
+		cv::UMat m_ThresholdImg;  // Thresholded filtered result
 		cv::UMat m_LocalMaxImg;   // The local maximum image
 		cv::UMat m_ParticleImg;   // The boolean image of particle locations
 	public:
 		Data(FIBITMAP * bmp);
 	};
 
-	// The operators
+	// The operators, could be chained
 	class ImgOperator {
 		virtual void Execute(Data& data) = 0;
 		virtual void operator()(Data& data) {

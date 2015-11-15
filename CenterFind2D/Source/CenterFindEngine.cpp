@@ -11,6 +11,10 @@
 // Constants
 const float kEPS(0.0000001f);
 
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Utility functions
+
 static void RecenterImage(cv::UMat& img, float m = 0.f, float M = 100.f) {
 	double range = M - m;
 	double min(1), max(2);
@@ -27,6 +31,10 @@ static void ShowImage(cv::UMat& img) {
 	cv::imshow("Display Window", disp);
 	cv::waitKey(0);
 }
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// CenterFindEngine::Parameters functions
 
 CenterFindEngine::Parameters::Parameters() :
 	m_uFileNamePad(0),
@@ -81,6 +89,10 @@ std::string CenterFindEngine::Parameters::GetFileName(uint32_t idx) {
     return m_strImgDir + "/" + m_strInputStem + "_" + num + m_strFileExt;
 }
 
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// CenterFindEngine::Data functions
+
 CenterFindEngine::Data::Data(FIBITMAP * bmp) {
 	cv::Mat image = cv::Mat::zeros(FreeImage_GetWidth(bmp), FreeImage_GetHeight(bmp), CV_8UC3);
 	
@@ -92,11 +104,15 @@ CenterFindEngine::Data::Data(FIBITMAP * bmp) {
     image /= 255.f;
 
     image.copyTo(m_InputImg);
-	m_BypassedImg = cv::UMat(image.size(), image.type(), 0.f);
+	m_FilteredImg = cv::UMat(image.size(), image.type(), 0.f);
 	m_ThresholdImg = cv::UMat(image.size(), image.type(), 0.f);
 	m_LocalMaxImg = cv::UMat(image.size(), image.type(), 0.f);
 	m_ParticleImg = cv::UMat(image.size(), image.type(), 0.f);
 }
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// CenterFindEngine::Filter functions
 
 CenterFindEngine::BandPass::BandPass() :
 	m_uGaussianRadius(0)
@@ -122,7 +138,7 @@ m_uGaussianRadius(radius)
 void CenterFindEngine::BandPass::Execute(CenterFindEngine::Data& data) {
 	// Make some references
 	cv::UMat& in = data.m_InputImg;
-	cv::UMat& bp = data.m_BypassedImg;
+	cv::UMat& bp = data.m_FilteredImg;
 
 	// Make tmp buffer
 	cv::UMat tmp(in.size(), in.type(), 0.f);
@@ -134,7 +150,6 @@ void CenterFindEngine::BandPass::Execute(CenterFindEngine::Data& data) {
 	cv::filter2D(in, tmp, -1, m_CircleMask);
 
 	// scale tmp down
-	float scale = 1 / (3 * pow(m_uGaussianRadius, 2));
 	cv::divide(tmp, (3 * pow(m_uGaussianRadius, 2)), tmp);
 
 	// subtract tmp from bandpass to get filtered output
@@ -143,6 +158,10 @@ void CenterFindEngine::BandPass::Execute(CenterFindEngine::Data& data) {
 	// Any negative values become 0
 	cv::threshold(bp, bp, 0, 1, cv::THRESH_TOZERO);
 }
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// CenterFindEngine::LocalMax functions
 
 CenterFindEngine::LocalMax::LocalMax() :
 	m_uDilationRadius(0),
@@ -163,7 +182,7 @@ m_fPctleThreshold(pctl_thresh)
 void CenterFindEngine::LocalMax::Execute(CenterFindEngine::Data& data) {
 	// Make some references
 	//cv::UMat& in = data.m_InputImg;
-	cv::UMat& bp = data.m_BypassedImg;
+	cv::UMat& bp = data.m_FilteredImg;
 	//cv::UMat& bpThresh = data.m_ThresholdImg;
 	cv::UMat& lm = data.m_LocalMaxImg;
 	cv::UMat& particles = data.m_ParticleImg;
@@ -195,28 +214,32 @@ void CenterFindEngine::LocalMax::Execute(CenterFindEngine::Data& data) {
     lm.convertTo(particles, CV_8U);
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// CenterFindEngine::ParticleFinder functions
+
+// Default constructor
 CenterFindEngine::ParticleFinder::ParticleFinder():
 	m_uMaskRadius(0),
 	m_uFeatureRadius(0)
 {}
 
+// Parameter constructor
 CenterFindEngine::ParticleFinder::ParticleFinder(int mask_radius, int feature_radius, int sc, float nr) :
 	m_uMaskRadius(mask_radius),
 	m_uFeatureRadius(feature_radius),
     m_uMaxStackCount(sc),
     m_fNeighborRadius(nr)
 {
-	// circle diameter
+	// Neighbor region diameter
 	int diameter = 2 * m_uMaskRadius + 1;
 
 	// Make host mats
 	cv::Mat h_Circ(cv::Size(diameter, diameter), CV_32F, 0.f);
-    
 	cv::Mat h_RX = h_Circ;
 	cv::Mat h_RY = h_Circ;
 	cv::Mat h_R2 = h_Circ;
 
-	// set up circle
+	// set up circle mask
 	cv::circle(h_Circ, cv::Point(mask_radius, mask_radius), mask_radius, 1.f, -1);
 
 	// set up Rx and part of r2
@@ -252,54 +275,41 @@ std::vector<CenterFindEngine::Particle> CenterFindEngine::ParticleFinder::GetFou
     // The vector may resize here; is that OK?
     // Otherwise put them into a new container and recombine
     
+    // Convert particle stacks to refined particles
     std::vector<Particle> ret(m_vFoundParticles.size());
-    auto it = m_vFoundParticles.begin();
+    auto it = ret.begin();
     for (auto& pStack : m_vFoundParticles)
         *it++ = pStack.GetRefinedParticle();
     
     return ret;
-    
-//    // First step; see if too mayn particles contribute to a given stack
-//    for (int i=0; i<m_vFoundParticles.size(); i++){
-//        // As a first pass, check the stack count; if it exceeds the maximum,
-//        // then split the stack into two particles; repeat as necessary
-//        Particle& p = m_vFoundParticles[i];
-//        if (p.stackCount > m_uMaxStackCount){
-//            Particle nP = p;
-//            p.stackCount = p.stackCount - m_uMaxStackCount;
-//            p.stackCount = m_uMaxStackCount;
-//            m_vFoundParticles.push_back(nP);
-//        }
-//    }
-//    
-//    // Second step; check intensity derivative; if there is an increase following
-//    // a period of decrease (the intensity was going down, and now it's going up),
-//    // then we say it's a new particle (we are iterating through the depth axis)
-//    for (int i=0; i<m_vFoundParticles.size(); i++){
-//        
-//    }
-//    
-//    return m_vFoundParticles;
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// CenterFindEngine::ParticleStack functions
+
+// Particle Stack initializing constructor
 CenterFindEngine::ParticleStack::ParticleStack(Particle p):
     uParticleCount(1),
     fMaxPeak(p.i),
     lContributingParticles({p})
 {}
 
+// Returns peak intensity across the stack
 float CenterFindEngine::ParticleStack::GetPeak() const{
     return fMaxPeak;
 }
 
+// Gets the last particle added to the list
 CenterFindEngine::Particle CenterFindEngine::ParticleStack::GetLastParticleAdded() const{
     return lContributingParticles.back();
 }
 
+// Gets the total # of particles contributing to this stack
 uint32_t CenterFindEngine::ParticleStack::GetParticleCount() const{
     return uParticleCount;
 }
 
+// add a particle to the stack, updating things as necessary
 void CenterFindEngine::ParticleStack::AddParticle(CenterFindEngine::Particle p){
     if (p.i > fMaxPeak)
         fMaxPeak = p.i;
@@ -307,6 +317,7 @@ void CenterFindEngine::ParticleStack::AddParticle(CenterFindEngine::Particle p){
     lContributingParticles.push_back(p);
 }
 
+// Combine all particles contributing to this stack into one refined particle
 CenterFindEngine::Particle CenterFindEngine::ParticleStack::GetRefinedParticle() const{
     Particle ret{0};
     float denom = 1.f / float(uParticleCount);
@@ -320,6 +331,7 @@ CenterFindEngine::Particle CenterFindEngine::ParticleStack::GetRefinedParticle()
     return ret;
 }
 
+// Find particle centers within a data image (meaning find the particle centers in this slice)
 uint32_t CenterFindEngine::ParticleFinder::FindParticles(CenterFindEngine::Data& data) {
 	cv::UMat& input = data.m_InputImg;
 	cv::UMat& lm = data.m_LocalMaxImg;
@@ -333,7 +345,7 @@ uint32_t CenterFindEngine::ParticleFinder::FindParticles(CenterFindEngine::Data&
     
     // Construct an Area of Interest only containing pixels
     // far enough in the image to count
-    cv::Rect AOI(border, border, sz.width - 2 * border, sz.height - 2 * border);
+    cv::Rect AOI(border, border, sz.width - border, sz.height - border);
 
 	// Until I have a kernel...
 	cv::Mat h_ParticleImg;
@@ -346,6 +358,8 @@ uint32_t CenterFindEngine::ParticleFinder::FindParticles(CenterFindEngine::Data&
 	for (int i = 0; i < sz.width; i++) {
 		for (int j = 0; j < sz.height; j++) {
 			int idx = i*sz.width + j;
+            
+            // The pixel at this location is nonzero if it is a local maxima, maybe particle center
 			char * ptr = h_ParticleImg.ptr<char>();
 			if (ptr[idx] != 0 && AOI.contains(cv::Point(i, j))) {
 				// Extract a region around i,j based on mask radius
@@ -362,11 +376,6 @@ uint32_t CenterFindEngine::ParticleFinder::FindParticles(CenterFindEngine::Data&
 
 				// If we have a particle, given that criteria
 				if (total_mass > 0.f) {
-					// Create the metrics struct
-					//CenterFindEngine::ParticleMetrics pMet;
-//					pMet.idx = float(idx);
-//					pMet.mass = total_mass;
-
 					// Sum local bool region 
 					cv::UMat m_Square = data.m_ParticleImg(extract);
 					float multiplicity = cv::sum(m_Square)[0];
@@ -386,6 +395,7 @@ uint32_t CenterFindEngine::ParticleFinder::FindParticles(CenterFindEngine::Data&
                     
                     // See if this particle matches any of the previously found particles
                     ParticleStack * matchStack = nullptr;
+                    
                     for (auto& pStack : m_vFoundParticles){
                         // We don't want too many stacks contributing to one particle
                         if (pStack.GetParticleCount() < m_uMaxStackCount){
@@ -412,8 +422,8 @@ uint32_t CenterFindEngine::ParticleFinder::FindParticles(CenterFindEngine::Data&
                             }
                         }
                         
+                        // Construct particle, either add to existing stack or make new stack
                         Particle p = {x_val, y_val, total_mass};
-                        
                         if (matchStack){
                             matchStack->AddParticle(p);
                         }
@@ -429,31 +439,47 @@ uint32_t CenterFindEngine::ParticleFinder::FindParticles(CenterFindEngine::Data&
 	return m_vFoundParticles.size();
 }
 
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// CenterFindEngine functions
+
+// Initialize the CenterFind engine
 CenterFindEngine::CenterFindEngine(const CenterFindEngine::Parameters params) :
-m_Params(params),
-m_fnBandPass(params.m_uFeatureRadius, params.m_fHWHMLength),
-m_fnLocalMax(params.m_uDilationRadius, params.m_fPctleThreshold),
-m_fnParticleFinder(params.m_uMaskRadius, params.m_uFeatureRadius, params.m_uMaxStackCount, params.m_fNeighborRadius)
+    m_Params(params),
+    m_fnBandPass(params.m_uFeatureRadius, params.m_fHWHMLength),
+    m_fnLocalMax(params.m_uDilationRadius, params.m_fPctleThreshold),
+    m_fnParticleFinder(params.m_uMaskRadius, params.m_uFeatureRadius, params.m_uMaxStackCount, params.m_fNeighborRadius)
 {
+    // Read in the tiff stacks specified by params
 	for (int i = m_Params.m_uStartFrame; i < m_Params.m_uEndFrame; i++) {
+        // Get tiff stack file name
 		std::string fileName = m_Params.GetFileName(i);
 		FIMULTIBITMAP * FI_Input = FreeImage_OpenMultiBitmap(FIF_TIFF, fileName.c_str(), 0, 1, 1, TIFF_DEFAULT);
+        
+        // Iterate through tiff stack, generate Data Image
 		for (int j = m_Params.m_uStartOfStack; j < m_Params.m_uEndOfStack; j++)
 			m_Images.emplace_back(FreeImage_LockPage(FI_Input, j - 1));
+        
+        // Free image
 		FreeImage_CloseMultiBitmap(FI_Input, TIFF_DEFAULT);
 	}
 }
 
+// Execute the Engine (find centers in Data
 std::vector<CenterFindEngine::Particle> CenterFindEngine::Execute() {
     int i(0);
+    
+    // For each data image
     for (auto& data : m_Images) {
+        // Filter image, find local maxima
         m_fnBandPass.Execute(data);
 		m_fnLocalMax.Execute(data);
         
+        // Find particle centers
         uint32_t count = m_fnParticleFinder.FindParticles(data);
         std::cout << count << ", " << i++ << std::endl;
 	}
 
+    // Convert particle centers into particle locations, return
     return m_fnParticleFinder.GetFoundParticles();
 }
 
