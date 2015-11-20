@@ -68,6 +68,14 @@ public:
         Particle GetLastParticleAdded() const;
         float GetPeak() const;
         uint32_t GetLastSliceIdx() const;
+        
+        // Iterator functions
+        auto begin() -> decltype(lContributingParticles.begin()) {
+            return lContributingParticles.begin();
+        }
+        auto end() -> decltype(lContributingParticles.end()) {
+            return lContributingParticles.end();
+        }
     };
 
 //	union ParticleMetrics {
