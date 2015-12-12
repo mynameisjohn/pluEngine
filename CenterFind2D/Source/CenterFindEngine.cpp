@@ -277,12 +277,22 @@ std::vector<CenterFindEngine::Particle> CenterFindEngine::ParticleFinder::GetFou
     // The vector may resize here; is that OK?
     // Otherwise put them into a new container and recombine
     
+    float avg(0);
+    
     // Convert particle stacks to refined particles
     std::vector<Particle> ret(m_vFoundParticles.size());
     auto it = ret.begin();
-    for (auto& pStack : m_vFoundParticles)
+    for (auto& pStack : m_vFoundParticles){
         *it++ = pStack.GetRefinedParticle();
-    
+        
+//        for (auto& p : pStack){
+//            std::cout << p.i << ", ";
+//        }
+//        std::cout << std::endl;
+        avg += float(pStack.GetParticleCount());
+    }
+    avg /= float(m_vFoundParticles.size());
+
     return ret;
 }
 
@@ -291,51 +301,51 @@ std::vector<CenterFindEngine::Particle> CenterFindEngine::ParticleFinder::GetFou
 
 // Particle Stack initializing constructor
 CenterFindEngine::ParticleStack::ParticleStack(Particle p, uint32_t slice):
-    uParticleCount(1),
-    uLastSliceIdx(slice),
-    fMaxPeak(p.i),
-    lContributingParticles({p})
+    m_uParticleCount(1),
+    m_uLastSliceIdx(slice),
+    m_fMaxPeak(p.i),
+    m_lContributingParticles({p})
 {}
 
 // Returns peak intensity across the stack
 float CenterFindEngine::ParticleStack::GetPeak() const{
-    return fMaxPeak;
+    return m_fMaxPeak;
 }
 
 // Gets the last particle added to the list
 CenterFindEngine::Particle CenterFindEngine::ParticleStack::GetLastParticleAdded() const{
-    return lContributingParticles.back();
+    return m_lContributingParticles.back();
 }
 
 // Keep track of slice idx for last particle added
 uint32_t CenterFindEngine::ParticleStack::GetLastSliceIdx() const{
-    return uLastSliceIdx;
+    return m_uLastSliceIdx;
 }
 
 // Gets the total # of particles contributing to this stack
 uint32_t CenterFindEngine::ParticleStack::GetParticleCount() const{
-    return uParticleCount;
+    return m_uParticleCount;
 }
 
 // add a particle to the stack, updating things as necessary
 void CenterFindEngine::ParticleStack::AddParticle(CenterFindEngine::Particle p, uint32_t slice){
-    if (p.i > fMaxPeak)
-        fMaxPeak = p.i;
-    uParticleCount++;
-    lContributingParticles.push_back(p);
-    uLastSliceIdx = std::max(uLastSliceIdx, slice); // max?
+    if (p.i > m_fMaxPeak)
+        m_fMaxPeak = p.i;
+    m_uParticleCount++;
+    m_lContributingParticles.push_back(p);
+    m_uLastSliceIdx = std::max(m_uLastSliceIdx, slice); // max?
 }
 
 // Combine all particles contributing to this stack into one refined particle
 CenterFindEngine::Particle CenterFindEngine::ParticleStack::GetRefinedParticle() const{
     Particle ret{0};
-    float denom = 1.f / float(uParticleCount);
-    for (auto& p : lContributingParticles){
+    float denom = 1.f / float(m_uParticleCount);
+    for (auto& p : m_lContributingParticles){
         ret.x += p.x * denom;
         ret.y += p.y * denom;
     }
     
-    ret.i = fMaxPeak;
+    ret.i = m_fMaxPeak;
     
     return ret;
 }
@@ -502,7 +512,7 @@ std::vector<CenterFindEngine::Particle> CenterFindEngine::Execute() {
         
         // Find particle centers
         uint32_t count = m_fnParticleFinder.FindParticles(data);
-        std::cout << count << ", " << i++ << std::endl;
+        //std::cout << count << ", " << i++ << std::endl;
 	}
 
     // Convert particle centers into particle locations, return

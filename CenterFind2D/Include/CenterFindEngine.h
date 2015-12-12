@@ -56,10 +56,21 @@ public:
     };
     
     class ParticleStack{
-        uint32_t uParticleCount;
-        uint32_t uLastSliceIdx;
-        float fMaxPeak;
-        std::list<Particle> lContributingParticles;
+    public:
+        // We use this to manage intensity state (should increase then decrease)
+        enum class IState{
+            NONE,
+            INCREASING,
+            DECREASING,
+            SEVER
+        };
+        
+    private:
+        uint32_t m_uParticleCount;
+        uint32_t m_uLastSliceIdx;
+        float m_fMaxPeak;
+        IState m_CurIntensityState;
+        std::list<Particle> m_lContributingParticles;
     public:
         ParticleStack(Particle first, uint32_t slice);
         void AddParticle(Particle p, uint32_t slice);
@@ -68,13 +79,14 @@ public:
         Particle GetLastParticleAdded() const;
         float GetPeak() const;
         uint32_t GetLastSliceIdx() const;
-        
+        IState GetCurIntensityState() const;
+        void AdvanceIntensityState();
         // Iterator functions
-        auto begin() -> decltype(lContributingParticles.begin()) {
-            return lContributingParticles.begin();
+        auto begin() -> decltype(m_lContributingParticles.begin()) {
+            return m_lContributingParticles.begin();
         }
-        auto end() -> decltype(lContributingParticles.end()) {
-            return lContributingParticles.end();
+        auto end() -> decltype(m_lContributingParticles.end()) {
+            return m_lContributingParticles.end();
         }
     };
 
@@ -224,6 +236,126 @@ public:
 	CenterFindEngine(const CenterFindEngine::Parameters params);
     std::vector<Particle> Execute();
 };
+
+#include <list>
+#include <vector>
+
+namespace CenterFind
+{
+    struct Particle {
+        float x{-1};    // x position (px)
+        float y{-1};    // y position (px)
+        float z{-1};    // z position (?)
+        float i{-1};    // intensity (?)
+    };
+    
+    class PStack {
+        // We use this to manage intensity state (should increase then decrease)
+        enum class IState{
+            NONE,
+            INCREASING,
+            DECREASING,
+            SEVER
+        };
+        
+    private:
+        uint32_t m_uParticleCount;
+        uint32_t m_uLastSliceIdx;
+        float m_fMaxPeak;
+        IState m_CurIntensityState;
+        std::list<Particle> m_liParticles;
+    public:
+        PStack(Particle first, uint32_t slice);
+        void AddParticle(Particle p, uint32_t slice);
+        Particle GetRefinedParticle() const;
+        uint32_t GetParticleCount() const;
+        Particle GetLastParticleAdded() const;
+        float GetPeak() const;
+        uint32_t GetLastSliceIdx() const;
+        IState GetCurIntensityState() const;
+        void AdvanceIntensityState();
+        // Iterator functions
+        auto begin() -> decltype(m_lContributingParticles.begin()) {
+            return m_lContributingParticles.begin();
+        }
+        auto end() -> decltype(m_lContributingParticles.end()) {
+            return m_lContributingParticles.end();
+        }
+    };
+    
+    // The mat declarations represent a basic signal flow
+    class Data {
+        uint32_t m_uSliceIdx;
+        cv::UMat m_InputImg;      // The input image
+        cv::UMat m_FilteredImg;   // Filtered result
+        cv::UMat m_ThresholdImg;  // Thresholded filtered result
+        cv::UMat m_LocalMaxImg;   // The local maximum image
+        cv::UMat m_ParticleImg;   // The boolean image of particle locations
+    public:
+        Data(FIBITMAP * bmp, uint32_t sliceIdx);
+    };
+    
+    // Abstract operator, could be useful later
+    class ImgOperator{
+        virtual void Execute(Data& data) = 0;
+        virtual void operator()(Data& data) {
+            Execute(data);
+        }
+    };
+    
+    // Bandpass
+    class BandPass : public ImgOperator {
+    public:
+        BandPass();
+        BandPass(int radius, float hwhm);
+        void Execute(Data& data) override;
+    private:
+        uint32_t m_uGaussianRadius;
+        cv::UMat m_GaussKernel;
+        cv::UMat m_CircleMask;
+    };
+    
+    // Local maximum
+    class LocalMax : public ImgOperator {
+    public:
+        LocalMax();
+        LocalMax(int radius, float pctl_thresh);
+        void Execute(Data& data) override;
+    private:
+        uint32_t m_uDilationRadius;
+        float m_fPctleThreshold;
+        cv::UMat m_DilationKernel;
+    };
+    
+    class Solver{
+    public:
+        Solver();
+        Solver(int mask_radius, int feature_radius, int sc, float nr);
+        uint32_t FindParticles(Data& data);
+        std::vector<Particle> GetFoundParticles();
+    private:
+        uint32_t m_uMaskRadius;
+        uint32_t m_uFeatureRadius;
+        uint32_t m_uMaxStackCount;
+        float m_fNeighborRadius;
+        cv::UMat m_CircleMask;
+        cv::UMat m_RadXKernel;
+        cv::UMat m_RadYKernel;
+        cv::UMat m_RadSqKernel;
+        std::vector<PStack> m_vFoundParticles;
+    };
+    
+    class Engine
+    {
+        std::vector<Data> m_vImages;
+        BandPass m_fnBandPass;
+        LocalMax m_fnLocalMax;
+        Solver m_ParticleSolver;
+    };
+}
+
+
+
 //
 //#include <vector>
 //#include <deque>
