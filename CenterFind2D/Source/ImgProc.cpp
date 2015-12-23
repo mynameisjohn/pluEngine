@@ -31,8 +31,11 @@ sliceIdx(sliceIdx) {
 	d_FilteredImg = GpuMat(d_InputImg.size(), CV_32F, 0.f);
 	d_DilateImg = GpuMat(d_InputImg.size(), CV_32F, 0.f);
 	d_LocalMaxImg = GpuMat(d_InputImg.size(), CV_32F, 0.f);
-	d_ParticleImg = GpuMat(d_InputImg.size(), CV_8U, 0.f);
 	d_TmpImg = GpuMat(d_InputImg.size(), CV_32F, 0.f);
+
+	// It's in our best interest to ensure this is continuous
+	cv::cuda::createContinuous(d_InputImg.size(), CV_8U, d_ParticleImg);
+	d_ParticleImg.setTo(0);
 }
 
 // Copy all new data
