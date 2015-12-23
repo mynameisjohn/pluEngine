@@ -1,13 +1,18 @@
 #include "CenterFind.h"
 
-using namespace Centerfind;
+#include "FnPtrHelper.h"
+
+#include <opencv2/core/core.hpp>
+#include <opencv2/highgui/highgui.hpp>
+#include <opencv2/cudaimgproc.hpp>
+#include <opencv2/cudaarithm.hpp>
 
 Datum::Datum() :
-m_uSliceIdx(0) {
-}
+	sliceIdx(0) 
+{}
 
 Datum::Datum(FIBITMAP * bmp, uint32_t sliceIdx) :
-uSliceIdx(sliceIdx) {
+sliceIdx(sliceIdx) {
 	// Create 24-bit RGB image, initialize to zero
 	cv::Mat image = cv::Mat::zeros(FreeImage_GetWidth(bmp), FreeImage_GetHeight(bmp), CV_8UC3);
 
@@ -22,12 +27,30 @@ uSliceIdx(sliceIdx) {
 	// Upload input to device
 	d_InputImg.upload(image);
 
-	// Initialize all other mats to zero on device
+	// Initialize all other mats to zero on device (may be superfluous)
 	d_FilteredImg = GpuMat(d_InputImg.size(), CV_32F, 0.f);
-	d_ThresholdImg = GpuMat(d_InputImg.size(), CV_32F, 0.f);
+	d_DilateImg = GpuMat(d_InputImg.size(), CV_32F, 0.f);
 	d_LocalMaxImg = GpuMat(d_InputImg.size(), CV_32F, 0.f);
-	d_ParticleImg = GpuMat(d_InputImg.size(), CV_32F, 0.f);
+	d_ParticleImg = GpuMat(d_InputImg.size(), CV_8U, 0.f);
 	d_TmpImg = GpuMat(d_InputImg.size(), CV_32F, 0.f);
+}
+
+// Copy all new data
+Datum::Datum(const Datum& D){
+	// Can I just do this?
+	*this = D;
+}
+
+Datum& Datum::operator=(const Datum& D) {
+	this->sliceIdx = D.sliceIdx;
+	D.d_InputImg.copyTo(this->d_InputImg);
+	D.d_FilteredImg.copyTo(this->d_FilteredImg);
+	D.d_DilateImg.copyTo(this->d_DilateImg);
+	D.d_LocalMaxImg.copyTo(this->d_LocalMaxImg);
+	D.d_ParticleImg.copyTo(this->d_ParticleImg);
+	D.d_TmpImg.copyTo(this->d_TmpImg);
+
+	return *this;
 }
 
 BandPass::BandPass() :
@@ -67,7 +90,7 @@ void BandPass::Execute(Datum& D) {
 	m_CircleFilter->apply(in, tmp);
 
 	// scale tmp down
-	const float scale = 0.33333f * powf(m_uGaussianRadius, 2);
+	const double scale = 1. / (3 * pow(m_uGaussianRadius, 2));
 	tmp.convertTo(tmp, CV_32F, scale);
 
 	// subtract tmp from bandpass to get filtered output
@@ -103,30 +126,27 @@ void LocalMax::Execute(Datum& D) {
 
 	// Make some references
 	GpuMat& bp = D.d_FilteredImg;
-	GpuMat& bpt = D.d_ThresholdImg;
+	GpuMat& dil = D.d_DilateImg;
 	GpuMat& lm = D.d_LocalMaxImg;
 	GpuMat& tmp = D.d_TmpImg;
 
 	// Assign entire bp thresh image to particle threshold
-	bpt.setTo(m_fPctleThreshold);
+	dil.setTo(m_fPctleThreshold);
 
-	// I have no idea why, but Peter remaps the image between 0 and 100 here
-	double range(100);
-	double min(1), max(2);
-	cv::cuda::minMax(bp, &min, &max);
-	double alpha = range / (max - min);
-	double beta = range * min / (max - min);
-	double scale = range / (max - min);
-	bp.convertTo(bp, CV_32F, alpha, beta);
+	// Remap image between 0 and 100, 
+	// anything below particle threshold = particle threshold
+	RemapImage(bp, 0, 100);
+	cv::cuda::max(bp, dil, dil);
 
 	// Dilate the image, which on CUDA involves converting it to a single byte format
 	// In order for this to work you have to scale by 255 and 1/255
-	bpt.convertTo(bpt, CV_8U, kToSingleByte);
-	m_DilationKernel->apply(bpt, tmp);
-	bpt.convertTo(bpt, CV_32F, kToFloat);
+	GpuMat sb;
+	dil.convertTo(sb, CV_8U);
+	m_DilationKernel->apply(sb, sb);
+	sb.convertTo(dil, CV_32F);
 
 	// subtract off initial bandpass from dilated, store in lm
-	cv::cuda::subtract(bp, lm, lm);
+	cv::cuda::subtract(bp, dil, lm);
 
 	// exponentiate to exxagerate
 	cv::cuda::exp(lm, lm);

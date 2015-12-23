@@ -1,5 +1,7 @@
 #include "CenterFindEngine.h"
 
+#include <array>
+
 int main(int argc, char ** argv) {
 	// Convert program args to CenterFind arguments
 	std::array<std::string, 15> args;

@@ -1,136 +1,138 @@
 #pragma once
 
-#include <opencv2/opencv.hpp>
-#include <opencv2/core/core.hpp>
-#include <opencv2/cudev.hpp>
-#include <opencv2/core/cuda.hpp>
-
 #include <FreeImage.h>
 
-#include <list>
-#include <vector>
+#include <opencv2/opencv.hpp>
+#include <opencv2/core/cuda.hpp>
+#include <opencv2/cudafilters.hpp>
 
 #include <stdint.h>
+#include <vector>
+#include <list>
 
-namespace CenterFind
-{
-	using cv::cuda::GpuMat;
+using cv::cuda::GpuMat;
 
-	struct Particle {
-		float x{ -1 };    // x position (px)
-		float y{ -1 };    // y position (px)
-		float z{ -1 };    // z position (?)
-		float i{ -1 };    // intensity (?)
+void RemapImage(GpuMat& img, float m, float M);
+void DisplayImage(GpuMat& img);
+
+struct Particle {
+	float x;
+	float y;
+	float z;
+	float i;
+};
+
+class ParticleStack {
+	uint32_t m_uParticleCount;
+	uint32_t m_uLastSliceIdx;
+	float m_fMaxPeak;
+	std::list<Particle> m_liContributingParticles;
+public:
+	ParticleStack();
+	ParticleStack(Particle first, uint32_t sliceIdx);
+	uint32_t AddParticle(Particle p, uint32_t sliceIdx);
+	Particle GetRefinedParticle() const;
+	uint32_t GetParticleCount() const;
+	Particle GetLastParticleAdded() const;
+	float GetPeak() const;
+	uint32_t GetLastSliceIdx() const;
+
+	// Comparison operator
+	struct comp {
+		bool operator()(const ParticleStack& a, const ParticleStack& b);
 	};
+};
 
-	class PStack {
-		// We use this to manage intensity state (should increase then decrease)
-		enum class IState{
-			NONE,
-			INCREASING,
-			DECREASING,
-			SEVER
-		};
+struct Datum {
+	int sliceIdx;
+	GpuMat d_InputImg;      // The input image
+	GpuMat d_FilteredImg;   // Filtered result
+	GpuMat d_DilateImg;		// Dilated filtered result
+	GpuMat d_LocalMaxImg;   // The local maximum image
+	GpuMat d_ParticleImg;   // The boolean image of particle locations
+	GpuMat d_TmpImg;		// The boolean image of particle locations
 
-	private:
-		uint32_t m_uParticleCount;
-		uint32_t m_uLastSliceIdx;
-		float m_fMaxPeak;
-		IState m_CurIntensityState;
-		std::list<Particle> m_liParticles;
-	public:
-		PStack();
-		PStack(Particle first, uint32_t slice);
-		void AddParticle(Particle p, uint32_t slice);
-		Particle GetRefinedParticle() const;
-		uint32_t GetParticleCount() const;
-		Particle GetLastParticleAdded() const;
-		float GetPeak() const;
-		uint32_t GetLastSliceIdx() const;
-		IState GetCurIntensityState() const;
-		void AdvanceIntensityState();
-		void Collapse();
+	Datum();
+	Datum(const Datum& D); // This creates new data
+	Datum(FIBITMAP * bmp, uint32_t sliceIdx);
 
-		// Iterator functions
-		auto begin() -> decltype(m_liParticles.begin()) {
-			return m_liParticles.begin();
-		}
-		auto end() -> decltype(m_liParticles.end()) {
-			return m_liParticles.end();
-		}
-	};
+	// Assignment impl of copy constructor
+	Datum& operator=(const Datum& D);
+};
 
-	// The mat declarations represent a basic signal flow
-	struct Datum {
-		uint32_t uSliceIdx;
-		GpuMat d_InputImg;      // The input image
-		GpuMat d_FilteredImg;   // Filtered result
-		GpuMat d_ThresholdImg;  // Thresholded filtered result
-		GpuMat d_LocalMaxImg;   // The local maximum image
-		GpuMat d_ParticleImg;   // The boolean image of particle locations
-		GpuMat d_TmpImg;		// The boolean image of particle locations
+// Abstract operator, could be useful later
+class ImgOperator {
+public:
+	virtual void Execute(Datum& data) = 0;
+	virtual void operator()(Datum& data) {
+		Execute(data);
+	}
+};
 
-		Datum();
-		Datum(FIBITMAP * bmp, uint32_t sliceIdx);
-	};
+// Bandpass
+class BandPass : public ImgOperator {
+public:
+	BandPass();
+	BandPass(int radius, float hwhm);
+	void Execute(Datum& data) override;
+private:
+	uint32_t m_uGaussianRadius;
+	float m_fHWHM;
+	cv::Ptr<cv::cuda::Filter> m_GaussFilter;
+	cv::Ptr<cv::cuda::Filter> m_CircleFilter;
 
-	// Abstract operator, could be useful later
-	class ImgOperator {
-		virtual void Execute(Data& data) = 0;
-		virtual void operator()(Data& data) {
-			Execute(data);
-		}
-	};
+public:
+	// set methods
+	void SetGaussianRadius(float rad);
+	void SetHWHM(float hwhm);
+};
 
-	// Bandpass
-	class BandPass : public ImgOperator {
-	public:
-		BandPass();
-		BandPass(int radius, float hwhm);
-		void Execute(Datum& data) override;
-	private:
-		uint32_t m_uGaussianRadius;
-		float m_fHWHM;
-		cv::Ptr<cv::cuda::Filter> m_GaussFilter;
-		cv::Ptr<cv::cuda::Filter> m_CircleFilter;
-	};
+// Local maximum
+class LocalMax : public ImgOperator {
+public:
+	LocalMax();
+	LocalMax(int radius, float pctl_thresh);
+	void Execute(Datum& data) override;
+private:
+	uint32_t m_uDilationRadius;
+	float m_fPctleThreshold;
+	cv::Ptr<cv::cuda::Filter> m_DilationKernel;
 
-	// Local maximum
-	class LocalMax : public ImgOperator {
-	public:
-		LocalMax();
-		LocalMax(int radius, float pctl_thresh);
-		void Execute(Datum& data) override;
-	private:
-		uint32_t m_uDilationRadius;
-		float m_fPctleThreshold;
-		cv::Ptr<cv::cuda::Filter> m_DilationKernel;
-	};
+public:
+	// set methods
+	void SetDilationRadius(uint32_t rad);
+	void SetParticleThreshold(float pthresh);
+};
 
-	class Solver {
-	public:
-		Solver();
-		Solver(int mask_radius, int feature_radius, int max_stack_count, float neighbor_radius);
-		uint32_t FindParticles(Data& data);
-		std::vector<Particle> GetFoundParticles();
-	private:
-		uint32_t m_uMaskRadius;
-		uint32_t m_uFeatureRadius;
-		uint32_t m_uMaxStackCount;
-		float m_fNeighborRadius;
-		cv::UMat m_CircleMask;
-		cv::UMat m_RadXKernel;
-		cv::UMat m_RadYKernel;
-		cv::UMat m_RadSqKernel;
-		std::vector<PStack> m_vFoundParticles;
-	};
+class Solver {
+public:
+	Solver();
+	Solver(uint32_t mR, uint32_t fR, uint32_t minSC, uint32_t maxSC, uint32_t nR);
+	uint32_t FindParticles(Datum& D);
+	std::vector<Particle> GetFoundParticles() const;
+private:
+	uint32_t m_uMaskRadius;
+	uint32_t m_uFeatureRadius;
+	uint32_t m_uMinStackCount;
+	uint32_t m_uMaxStackCount;
+	uint32_t m_uNeighborRadius;
+	cv::Mat m_CircleMask; // on the host for now
+	cv::Mat m_RadXKernel;
+	cv::Mat m_RadYKernel;
+	cv::Mat m_RadSqKernel;
+	std::vector<ParticleStack> m_vFoundParticles;
+};
 
-	class Engine {
-		std::vector<Data> m_vImages;
-		BandPass m_fnBandPass;
-		LocalMax m_fnLocalMax;
-		Solver m_ParticleSolver;
-	public:
-		Engine();
-	};
-}
+class Engine {
+	std::vector<Datum> m_vData;
+	BandPass m_fnBandPass;
+	LocalMax m_fnLocalMax;
+	Solver m_ParticleSolver;
+public:
+	Engine();
+	bool Init(std::string stackPath, int startOfStack, int endOfStack);
+	int Execute();
+
+	BandPass * GetPandPass();
+	LocalMax * GetLocalMax();
+};
