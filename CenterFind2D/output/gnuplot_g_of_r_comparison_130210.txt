@@ -1,0 +1,5 @@
+set terminal postscript enhanced color font "Helvetica" 10
+set output "g_of_r_comparison.eps"
+set xlabel "r (microns)"
+set ylabel "g(r)"
+plot "phi41pct_3D_6zoom_gr3_ref.txt" using 1:3 title "reference g(r)" with lines, "phi41pct_3D_6zoom_gr3.txt" using 1:3 title "current g(r)" with points
