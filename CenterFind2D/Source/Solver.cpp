@@ -190,3 +190,12 @@ std::vector<Particle> Solver::GetFoundParticles() const{
 				   [](const ParticleStack& pS) {return pS.GetRefinedParticle(); });
 	return ret;
 }
+
+uint32_t Solver::FindParticles( Datum& D )
+{
+	// At this point D.d_ParticleImg has the binary image we want (I think)
+	GpuMat& pImg = D.d_ParticleImg;
+
+	// We make a thrust vector out of it (it's contiguous)
+	unsigned char * pData = pImg.ptr<unsigned char>();
+}

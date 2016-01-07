@@ -7,6 +7,29 @@
 #include <opencv2/cudaimgproc.hpp>
 #include <opencv2/cudaarithm.hpp>
 
+// I may make this adjustable at some point
+const static float kEpsilon = 0.0001f;
+
+void showImage(cv::Mat& img) {
+	using namespace cv;
+	Mat x = img;
+
+	//RecenterImage(x, 1);
+	double min(1), max(2);
+	minMaxLoc(x, &min, &max);
+	x = (x - min) / (max - min);
+
+	namedWindow("Display window", WINDOW_AUTOSIZE);// Create a window for display.
+	imshow("Display window", x);                   // Show our image inside it.
+	waitKey(0);
+}
+
+void showImage(GpuMat& img) {
+	cv::Mat m;
+	img.download(m);
+	showImage(m);
+}
+
 Datum::Datum() :
 	sliceIdx(0) 
 {}
@@ -21,12 +44,12 @@ sliceIdx(sliceIdx) {
 
 	// Convert cvMat to greyscale float
 	cvtColor(image, image, CV_RGB2GRAY);
+	
 	image.convertTo(image, CV_32F);
 	image /= 255.f;
-
+	
 	// Upload input to device
 	d_InputImg.upload(image);
-
 	// Initialize all other mats to zero on device (may be superfluous)
 	d_FilteredImg = GpuMat(d_InputImg.size(), CV_32F, 0.f);
 	d_DilateImg = GpuMat(d_InputImg.size(), CV_32F, 0.f);
@@ -76,7 +99,7 @@ m_fHWHM(hwhm) {
 
 	// Create Gaussian Filter
 	const cv::Size filterDiameter(diameter, diameter);
-	const double sigma = 0.5 * (m_fHWHM / 0.8325546);
+	const double sigma = m_fHWHM / ((sqrt(2 * log(2))));
 	m_GaussFilter = cv::cuda::createGaussianFilter(CV_32F, CV_32F, filterDiameter, sigma);
 }
 
@@ -119,45 +142,28 @@ m_fPctleThreshold(pctl_thresh) {
 
 	// Create dilation kernel from host kernel (only single byte supported? why nVidia why)
 	m_DilationKernel = cv::cuda::createMorphologyFilter(cv::MORPH_DILATE, CV_8U, h_Dilation);
+
+	// might need to mess with normalization and scale
+	m_DerivKernel = cv::cuda::createDerivFilter(CV_32F, CV_32F, 1, 1, diameter, true);
 }
 
 void LocalMax::Execute(Datum& D) {
-	// Useful constants
-	const double kEPS(0.0000001f);				// A low number
-	const double kToSingleByte = double(0xFF);	// brings float[0, 1] to byte[0, 255]
-	const double kToFloat = 1 / double(0xFF);	// and back again
-
 	// Make some references
 	GpuMat& bp = D.d_FilteredImg;
 	GpuMat& dil = D.d_DilateImg;
 	GpuMat& lm = D.d_LocalMaxImg;
 	GpuMat& tmp = D.d_TmpImg;
+	GpuMat& thresh = D.d_ThreshImg;
+	GpuMat out;
 
-	// Assign entire bp thresh image to particle threshold
-	dil.setTo(m_fPctleThreshold);
+	thresh = GpuMat( bp.size(), CV_32F, (uint8_t) m_fPctleThreshold );
+	RemapImage( bp, 0, 100 );
+	cv::cuda::max( bp, thresh, thresh );
 
-	// Remap image between 0 and 100, 
-	// anything below particle threshold = particle threshold
-	RemapImage(bp, 0, 100);
-	cv::cuda::max(bp, dil, dil);
-
-	// Dilate the image, which on CUDA involves converting it to a single byte format
-	// In order for this to work you have to scale by 255 and 1/255
-	GpuMat sb;
-	dil.convertTo(sb, CV_8U);
-	m_DilationKernel->apply(sb, sb);
-	sb.convertTo(dil, CV_32F);
-
-	// subtract off initial bandpass from dilated, store in lm
-	cv::cuda::subtract(bp, dil, lm);
-
-	// exponentiate to exxagerate
-	cv::cuda::exp(lm, lm);
-
-	// threshold so that things close to 1 stay and all else goes (booleans)
-	cv::cuda::threshold(lm, lm, 1 - kEPS, 1, cv::THRESH_BINARY);
-
-	// Convert local max image to binary single byte image (boolean)
-	// maybe I should just work in single byte after the dilation...
-	lm.convertTo(D.d_ParticleImg, CV_8U);
+	dil.setTo( m_fPctleThreshold );
+	m_DilationKernel->apply( thresh, dil );
+	cv::cuda::subtract( bp, dil, lm );
+	cv::cuda::exp( lm, lm );
+	cv::cuda::threshold( lm, lm, 1 - kEpsilon, 1, cv::THRESH_BINARY );
+	lm.convertTo( D.d_ParticleImg, CV_8U );
 }

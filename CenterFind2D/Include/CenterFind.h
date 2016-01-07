@@ -50,7 +50,8 @@ struct Datum {
 	GpuMat d_DilateImg;		// Dilated filtered result
 	GpuMat d_LocalMaxImg;   // The local maximum image
 	GpuMat d_ParticleImg;   // The boolean image of particle locations
-	GpuMat d_TmpImg;		// The boolean image of particle locations
+	GpuMat d_ThreshImg;		// The thresholded filtered image, used in particle detection
+	GpuMat d_TmpImg;		// Temp buffer
 
 	Datum();
 	Datum(const Datum& D); // This creates new data
@@ -97,7 +98,7 @@ private:
 	uint32_t m_uDilationRadius;
 	float m_fPctleThreshold;
 	cv::Ptr<cv::cuda::Filter> m_DilationKernel;
-
+	cv::Ptr<cv::cuda::Filter> m_DerivKernel;
 public:
 	// set methods
 	void SetDilationRadius(uint32_t rad);
@@ -136,3 +137,9 @@ public:
 	BandPass * GetPandPass();
 	LocalMax * GetLocalMax();
 };
+
+#include <opencv2/core/core.hpp>
+#include <opencv2/highgui/highgui.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
+void showImage(cv::Mat& img);
+void showImage(GpuMat& img);

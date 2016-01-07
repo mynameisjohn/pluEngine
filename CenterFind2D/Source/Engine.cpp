@@ -67,11 +67,14 @@ void getUserParams(Datum D, BandPass * pEngineBP, LocalMax * pEngineLM, Solver *
 		{ particleThreshTBName, 5 } // PLuTARC_testbed
 	};
 
+	const float trackBarResolution = 1000;
+	for (auto& it : mapParamValues)
+		it.second *= trackBarResolution;
 	// Trackbar callback, implemented below
 	std::function<void(int, void *)> trackBarCallback = [&](int pos, void * priv) {
 		// Construct operators based on current trackbar values
-		BandPass fnBandPass(mapParamValues[gaussRadiusTBName], mapParamValues[hwhmTBName]);
-		LocalMax fnLocalMax(mapParamValues[dilationRadiusTBName], mapParamValues[particleThreshTBName]);
+		BandPass fnBandPass(mapParamValues[gaussRadiusTBName] / trackBarResolution, mapParamValues[hwhmTBName] / trackBarResolution);
+		LocalMax fnLocalMax(mapParamValues[dilationRadiusTBName] / trackBarResolution, mapParamValues[particleThreshTBName] / trackBarResolution);
 
 		// Generate processed images
 		fnBandPass(D);
@@ -79,7 +82,8 @@ void getUserParams(Datum D, BandPass * pEngineBP, LocalMax * pEngineLM, Solver *
 
 		// returns formatted images for display
 		auto makeDisplayImage = [](GpuMat& in) {
-			GpuMat out = in;
+			GpuMat out;
+			in.convertTo(out, CV_32F);
 			RemapImage(out, 0, 1);
 			return out;
 		};
@@ -117,10 +121,11 @@ void getUserParams(Datum D, BandPass * pEngineBP, LocalMax * pEngineLM, Solver *
 			cv::createTrackbar(tbName, windowName, &mapParamValues[tbName], maxVal, get_fn_ptr<0>(trackBarCallback));
 		}
 	};
-	createTrackBar(gaussRadiusTBName, 15);
-	createTrackBar(hwhmTBName, 15);
-	createTrackBar(dilationRadiusTBName, 15);
-	createTrackBar(particleThreshTBName, 15);
+	
+	createTrackBar(gaussRadiusTBName, 15 * trackBarResolution);
+	createTrackBar(hwhmTBName, 15 * trackBarResolution);
+	createTrackBar(dilationRadiusTBName, 15 * trackBarResolution);
+	createTrackBar(particleThreshTBName, 15 * trackBarResolution);
 
 	// Call the callback on our own, just to pump things and show the images
 	trackBarCallback(0, nullptr);
@@ -132,8 +137,8 @@ void getUserParams(Datum D, BandPass * pEngineBP, LocalMax * pEngineLM, Solver *
 	cv::destroyWindow(windowName);
 
 	// Fill in pointers with new items
-	*pEngineBP = BandPass(mapParamValues[gaussRadiusTBName], mapParamValues[hwhmTBName]);
-	*pEngineLM = LocalMax(mapParamValues[dilationRadiusTBName], mapParamValues[particleThreshTBName]);
+	*pEngineBP = BandPass(mapParamValues[gaussRadiusTBName] / trackBarResolution, mapParamValues[hwhmTBName] / trackBarResolution);
+	*pEngineLM = LocalMax(mapParamValues[dilationRadiusTBName] / trackBarResolution, mapParamValues[particleThreshTBName] / trackBarResolution);
 	*pEngineSolver = Solver(3, mapParamValues[gaussRadiusTBName], 3, 5, 5);
 }
 
