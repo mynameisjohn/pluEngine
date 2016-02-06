@@ -16,6 +16,23 @@ m_uNeighborRadius( 0 )
 {
 }
 
+
+struct get_int2 : public thrust::unary_function<unsigned int, int2 >
+{
+	int N;
+	get_int2( int n ) :
+		N( n )
+	{
+	}
+	__host__ __device__
+		inline int2 operator()( unsigned int idx )
+	{
+		int x = idx % N;
+		int y = idx / N;;
+		return make_int2( x, y );
+	}
+};
+
 // Kernel for initializing solver kernels...kernel kernel
 __global__
 void createSolverKernels( int radius, float * circ, float * x, float * y, float * sq )
@@ -230,7 +247,7 @@ struct GetParticle
 	Particle operator()( int idx )
 	{
 		// This would be the 2-d pixel location
-		float2 loc2D = make_float2( idx, idx );
+		int2 loc2D = get_int2( N )( idx );
 
 		// Center of the sum region
 		float * center = &lmImg[idx];
@@ -287,6 +304,10 @@ uint32_t Solver::FindParticles( Datum& D )
 	// Stream compact locations
 	auto lastParticleIt = thrust::copy_if( locFindItBegin, locFindItEnd, locFindItOutput, is_nonzero() ); // is this legit? if not is_nonzero() works
 	size_t numParticles = lastParticleIt - locFindItOutput;
+
+	// Also, if you ever decide to display the particle locations on an image, here are the 2-d locations
+	thrust::device_vector<int2> d_2DParticleLocations( numParticles );
+	thrust::transform( d_ParticleIndices.begin(), d_ParticleIndices.end(), d_2DParticleLocations.begin(), get_int2( sqrt( N + 0.1 ) ) );
 
 	// For each newly found particle, we can now transform it into a real particle
 	// In order to do that we'll need some info about the lm img
