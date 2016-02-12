@@ -7,6 +7,8 @@
 #include <opencv2/cudaimgproc.hpp>
 #include <opencv2/cudaarithm.hpp>
 
+#include <FreeImage.h>
+
 // I may make this adjustable at some point
 const static float kEpsilon = 0.0001f;
 
@@ -141,7 +143,7 @@ m_fPctleThreshold(pctl_thresh) {
 	cv::Mat h_Dilation = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(diameter, diameter));
 
 	// Create dilation kernel from host kernel (only single byte supported? why nVidia why)
-	m_DilationKernel = cv::cuda::createMorphologyFilter(cv::MORPH_DILATE, CV_8U, h_Dilation);
+	m_DilationKernel = cv::cuda::createMorphologyFilter(cv::MORPH_DILATE, CV_32F, h_Dilation);
 
 	// might need to mess with normalization and scale
 	m_DerivKernel = cv::cuda::createDerivFilter(CV_32F, CV_32F, 1, 1, diameter, true);
