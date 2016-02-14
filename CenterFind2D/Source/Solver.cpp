@@ -127,6 +127,9 @@ uint32_t Solver::FindParticles(Datum& D) {
 		std::transform(m_vPrevParticles.begin(), m_vPrevParticles.end(), particleIndices.begin(),
 			[N, m](const Particle& p) {return pixelToGridIdx(p, N, m); });
 
+		//for (auto i : particleIndices)
+		//	std::cout << i << std::endl;
+
 		for (auto cellIt = m_GridCells.begin(); cellIt != m_GridCells.end(); ++cellIt) {
 			int idx = std::distance(m_GridCells.begin(), cellIt);
 			auto lowerIt = std::lower_bound(particleIndices.begin(), particleIndices.end(), idx);;
@@ -282,10 +285,11 @@ uint32_t Solver::FindParticles(Datum& D) {
 			// If we didn't sever and null out above
 			if (pBestMatch != nullptr) {
 
-				// It's a match, bump the particle count, compute new position and z code
+				// It's a match, bump the particle count and compute an averaged position (?)
 				pBestMatch->nContributingParticles++;
-				pBestMatch->x = 0.5f * (pBestMatch->x + newParticle.x);
-				pBestMatch->y = 0.5f * (pBestMatch->y + newParticle.y);
+				//pBestMatch->x = 0.5f * (pBestMatch->x + newParticle.x);
+				//pBestMatch->y = 0.5f * (pBestMatch->y + newParticle.y);
+
 			}
 		}
 
@@ -295,9 +299,15 @@ uint32_t Solver::FindParticles(Datum& D) {
 	}
 
 	// tack on unmatched particles and sort (will be more complicated in thrust)
-	m_vPrevParticles.insert(m_vPrevParticles.end(), vUnmatchedParticles.begin(), vUnmatchedParticles.end());
-	std::sort(m_vPrevParticles.begin(), m_vPrevParticles.end(),
+	//
+
+	std::sort(vUnmatchedParticles.begin(), vUnmatchedParticles.end(),
 		[N, m](const Particle& a, const Particle& b) {
+		return pixelToGridIdx(a, N, m) < pixelToGridIdx(b, N, m);
+	});
+
+	auto sortIt = m_vPrevParticles.insert(m_vPrevParticles.end(), vUnmatchedParticles.begin(), vUnmatchedParticles.end());
+	std::inplace_merge(m_vPrevParticles.begin(), sortIt, m_vPrevParticles.end(), [N, m](const Particle& a, const Particle& b) {
 		return pixelToGridIdx(a, N, m) < pixelToGridIdx(b, N, m);
 	});
 
