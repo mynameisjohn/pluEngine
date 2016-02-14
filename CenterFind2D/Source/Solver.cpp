@@ -1,6 +1,19 @@
 #include "CenterFind.h"
-
+#include <iterator>
+#include <algorithm>
 #include <set>
+
+// x, y, i default to -1
+Particle::Particle(float x, float y, float i) :
+z(-1.f),
+peakIntensity(-1.f),
+nContributingParticles(0),
+pState(Particle::State::NO_MATCH)
+{
+	this->x = x;
+	this->y = y;
+	this->i = i;
+}
 
 Solver::Solver() :
 m_uMaskRadius(0),
@@ -11,6 +24,7 @@ m_uNeighborRadius(0) {
 
 Solver::Solver(uint32_t mR, uint32_t fR, uint32_t minSC, uint32_t maxSC, uint32_t nR) :
 m_uMaskRadius(mR),
+m_nMaxLevel(3),
 m_uFeatureRadius(fR),
 m_uMinStackCount(minSC),
 m_uMaxStackCount(maxSC),
@@ -55,7 +69,39 @@ m_uNeighborRadius(nR) {
 	h_R2.copyTo(m_RadSqKernel);
 }
 
+int pixelToGridIdx(float x, float y, int N, int m) {
+	const int cellSize = N >> m;
+	const int cellCount = N / cellSize;
+
+	int cellX = x / cellSize;
+	int cellY = y / cellSize;
+
+	int cellIdx = cellX + cellCount * cellY;
+	return cellIdx;
+}
+
+std::pair<int, int> gridIdxtoPixel(int idx, int N, int m) {
+	const int cellSize = N >> m;
+	const int cellCount = N / cellSize;
+
+	int cellX = idx % cellCount;
+	int cellY = idx / cellCount;
+
+	return{ cellSize * cellX, cellSize * cellY };
+}
+
+int pixelToGridIdx(Particle p, int N, int m) {
+	return pixelToGridIdx(p.x, p.y, N, m);
+}
+
 uint32_t Solver::FindParticles(Datum& D) {
+	const int N = D.d_LocalMaxImg.rows;
+	const int m = m_nMaxLevel;
+	const int cellSize = N >> m;
+	const int cellCount = N / cellSize;
+
+	std::vector<Particle> vNewParticles, vUnmatchedParticles, vSortedParticleVec;
+
 	// We're just doing this on the host for now
 	// so download things here
 	cv::Mat h_Input, h_LocalMax, h_ParticleImg;
@@ -68,11 +114,28 @@ uint32_t Solver::FindParticles(Datum& D) {
 	int border = m_uFeatureRadius;
 	cv::Rect AOI({ border, border }, h_Input.size() - cv::Size(border, border));
 
-	// We insert new particle stacks in order, to avoid sorting often
-	std::vector <ParticleStack> foundParticles;
+	if (m_GridCells.empty()) {
+		m_GridCells.resize(cellCount * cellCount);
+	}
+	memset(m_GridCells.data(), -1, sizeof(Cell) * m_GridCells.size());
 
-	// Precompute this, neighbor radius squared
-	const float fNeighborRsq = powf((float)m_uNeighborRadius, 2);
+	// set up ranges in cells given previous image
+	// Find grid cell ranges
+	// Thrust would make this cuter
+	if (m_vPrevParticles.empty() == false) {
+		std::vector<int> particleIndices(m_vPrevParticles.size());
+		std::transform(m_vPrevParticles.begin(), m_vPrevParticles.end(), particleIndices.begin(),
+			[N, m](const Particle& p) {return pixelToGridIdx(p, N, m); });
+
+		for (auto cellIt = m_GridCells.begin(); cellIt != m_GridCells.end(); ++cellIt) {
+			int idx = std::distance(m_GridCells.begin(), cellIt);
+			auto lowerIt = std::lower_bound(particleIndices.begin(), particleIndices.end(), idx);;
+			auto upperIt = std::upper_bound(particleIndices.begin(), particleIndices.end(), idx);;
+			cellIt->lower = std::distance(particleIndices.begin(), lowerIt);
+			cellIt->upper = std::distance(particleIndices.begin(), upperIt);
+		}
+	}
+
 	// Loop through every pixel of particle image inside AOI, stopping at nonzero values
 	uint8_t * particleImgPtr = h_ParticleImg.ptr<uint8_t>();
 	for (int xIdx = AOI.x; xIdx < AOI.width; xIdx++) {
@@ -111,77 +174,136 @@ uint32_t Solver::FindParticles(Datum& D) {
 					float x_val = x_offset + float(xIdx);
 					float y_val = y_offset + float(yIdx);
 
-					// We are only interested in linking up with particles
-					// from the previous slice, so look in that range
-					bool matchFound(false);
-					int nParticlesSeached(0);
-					for (auto rIt = m_vFoundParticles.rbegin(); rIt != m_vFoundParticles.rend(); ++rIt) {
-						// Break if we're in a new slice Idx (slices are sorted by slice idx)
-						if (rIt->GetLastSliceIdx() < (D.sliceIdx - 1))
-							break;
-
-						nParticlesSeached++;
-
-						// Make a reference
-						ParticleStack& pStack = *rIt;
-
-						// We don't want too many stacks contributing to one particle
-						if (pStack.GetParticleCount() < m_uMaxStackCount) {
-							// We want the contributing particle in the previous slice
-							// (what if it doesn't exist? I'm just going to ask for the top)
-							// See if it's reasonably close to the last particle added
-							// Another alternative here is to keep a running average
-							// of the particle location in a stack (in xy) and check
-							// the distance from that. Not sure what's the better option
-							Particle prev = pStack.GetLastParticleAdded();
-							float dX = prev.x - x_val;
-							float dY = prev.y - y_val;
-							float r2 = powf(dX, 2) + powf(dY, 2);
-
-							// If it's close and the intensity is decreasing (?)
-							if (r2 < fNeighborRsq /*&& prev.i > total_mass*/) {
-								// make match and break
-
-								// Add particle to stack, move this stack
-								// to the "to be added" container so it doesn't
-								// get picked up again or stagger the vector
-								Particle p = { x_val, y_val, total_mass };
-								pStack.AddParticle(p, D.sliceIdx);
-
-								foundParticles.push_back(pStack);
-								m_vFoundParticles.erase(std::next(rIt).base());
-								matchFound = true;
-								break;
-							}
-						}
-					}
-
-					// If no match was found, make a new particle
-					if (matchFound == false) {
-						Particle p = { x_val, y_val, total_mass };
-						foundParticles.emplace_back(p, D.sliceIdx);
-					}
-
-					//// Construct particle, either add to existing stack or make new stack
-					//Particle p = { x_val, y_val, total_mass };
-					//if (matchStack) {
-					//	matchStack->AddParticle(p, D.sliceIdx);
-					//}
-					//	
-					//else 
-					//	foundParticles.emplace_back(p, D.sliceIdx);
+					vNewParticles.emplace_back(x_val, y_val, total_mass);
 				}
 			}
 		}
 	}
 
-	// Insert all newly found particles
+	for (auto& newParticle : vNewParticles) {
+		// Find this particle's cell
+		int cellIdx = pixelToGridIdx(newParticle.x, newParticle.y, N, m);
+		const Cell& cell = m_GridCells[cellIdx];
 
-	//std::copy(foundParticles.begin(), foundParticles.end(), std::back_inserter(m_vFoundParticles));
-	m_vFoundParticles.insert(m_vFoundParticles.end(), foundParticles.begin(), foundParticles.end());
+		// Not ideal, but who cares
+		std::list<const Cell const *> cellsToSearch = { &cell };
 
-	// Return count of newly found particles
-	return foundParticles.size();
+		// Check left if we aren't on the left edge
+		int cellX = cellIdx % cellCount;
+		if (cellX != 0) {
+			float left = cellX * cellSize;
+			if (newParticle.x - m_uNeighborRadius < left)
+				cellsToSearch.push_back(&m_GridCells[cellIdx - 1]);
+		}
+
+		// Check right if we aren't on the right edge
+		if (cellX != cellCount - 1) {
+			float right = (cellX + 1) * cellSize;
+			if (newParticle.x + float(m_uNeighborRadius) > right)
+				cellsToSearch.push_back(&m_GridCells[cellIdx + 1]);
+		}
+
+		// Check below if we aren't at the bottom
+		int cellY = cellIdx / cellCount;
+		if (cellY != 0) {
+			float bottom = cellY * cellSize;
+			if (newParticle.y - m_uNeighborRadius < bottom)
+				cellsToSearch.push_back(&m_GridCells[cellIdx - cellCount]);
+		}
+
+		// Check above if we aren't on top
+		if (cellY != cellCount - 1) {
+			float top = (cellY + 1) * cellSize;
+			if (newParticle.y + m_uNeighborRadius > top)
+				cellsToSearch.push_back(&m_GridCells[cellIdx + cellCount]);
+		}
+
+		Particle * pBestMatch = nullptr;
+		for (auto& cell : cellsToSearch) {
+			for (int i = cell->lower; i != cell->upper; i++) {
+				// Ref to potential match
+				Particle& oldParticle = m_vPrevParticles[i];
+
+				// We can't have too many particles contributing to the same particle stack
+				if (oldParticle.nContributingParticles > m_uMaxStackCount)
+					continue;
+
+				// If the particle stack has been severed, we don't care
+				if (oldParticle.pState == Particle::State::SEVER)
+					continue;
+
+				// See if the particle is within our range
+				float dX = oldParticle.x - newParticle.x;
+				float dY = oldParticle.y - newParticle.y;
+				float distSq = pow(dX, 2) + pow(dY, 2);
+
+				if (distSq < float(m_uNeighborRadius * m_uNeighborRadius)) {
+					// If there already was a match, see if this one is better
+					if (pBestMatch) {
+						// Find the old distance
+						dX = pBestMatch->x - newParticle.x;
+						dY = pBestMatch->y - newParticle.y;
+
+						// If this one is closer, assign it as the match
+						if (pow(dX, 2) + pow(dY, 2) > distSq)
+							pBestMatch = &oldParticle;
+					}
+					else pBestMatch = &oldParticle;
+				}
+			}
+		}
+
+		// If we found a match, handle the intensity state logic
+		if (pBestMatch != nullptr) {
+			// If it's close, handle its intensity state
+			switch (pBestMatch->pState) {
+			case Particle::State::NO_MATCH:
+				// Shouldn't ever get no match, but assign the state and fall through
+				pBestMatch->pState = Particle::State::INCREASING;
+			case Particle::State::INCREASING:
+				// If we're increasing, see if the new guy prompts a decrease
+				if (pBestMatch->i > newParticle.i)
+					pBestMatch->pState = Particle::State::DECREASING;
+				// Otherwise see if we should update the peak intensity
+				else if (newParticle.i > pBestMatch->peakIntensity)
+					pBestMatch->peakIntensity = newParticle.i;
+				break;
+			case Particle::State::DECREASING:
+				// In this case, if it's still decreasing then fall through
+				if (pBestMatch->i > newParticle.i)
+					break;
+				// If we're severing, assing the state and fall through
+				pBestMatch->pState = Particle::State::SEVER;
+			case Particle::State::SEVER:
+				// Continue here (could catch this earlier)
+				pBestMatch = nullptr;
+			}
+
+			// If we didn't sever and null out above
+			if (pBestMatch != nullptr) {
+
+				// It's a match, bump the particle count, compute new position and z code
+				pBestMatch->nContributingParticles++;
+				pBestMatch->x = 0.5f * (pBestMatch->x + newParticle.x);
+				pBestMatch->y = 0.5f * (pBestMatch->y + newParticle.y);
+			}
+		}
+
+		// If this is still null, there isn't a goood matching particle, so make a new one
+		if (pBestMatch == nullptr)
+			vUnmatchedParticles.push_back(newParticle);
+	}
+
+	// tack on unmatched particles and sort (will be more complicated in thrust)
+	m_vPrevParticles.insert(m_vPrevParticles.end(), vUnmatchedParticles.begin(), vUnmatchedParticles.end());
+	std::sort(m_vPrevParticles.begin(), m_vPrevParticles.end(),
+		[N, m](const Particle& a, const Particle& b) {
+		return pixelToGridIdx(a, N, m) < pixelToGridIdx(b, N, m);
+	});
+
+	std::cout << "New Particles:\t" << vNewParticles.size() << "\tUnmatched Particles:\t" << vUnmatchedParticles.size() << "\tFound Particles:\t" << m_vPrevParticles.size() << std::endl;
+
+	return m_vPrevParticles.size();
 }
 
 std::vector<Particle> Solver::GetFoundParticles() const{
@@ -189,13 +311,4 @@ std::vector<Particle> Solver::GetFoundParticles() const{
 	std::transform(m_vFoundParticles.begin(), m_vFoundParticles.end(), ret.begin(), 
 				   [](const ParticleStack& pS) {return pS.GetRefinedParticle(); });
 	return ret;
-}
-
-uint32_t Solver::FindParticles( Datum& D )
-{
-	// At this point D.d_ParticleImg has the binary image we want (I think)
-	GpuMat& pImg = D.d_ParticleImg;
-
-	// We make a thrust vector out of it (it's contiguous)
-	unsigned char * pData = pImg.ptr<unsigned char>();
 }

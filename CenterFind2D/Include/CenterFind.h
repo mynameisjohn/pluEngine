@@ -1,7 +1,5 @@
 #pragma once
 
-#include <FreeImage.h>
-
 #include <opencv2/opencv.hpp>
 #include <opencv2/core/cuda.hpp>
 #include <opencv2/cudafilters.hpp>
@@ -15,11 +13,29 @@ using cv::cuda::GpuMat;
 void RemapImage(GpuMat& img, float m, float M);
 void DisplayImage(GpuMat& img);
 
+// Forward for freeimage type
+struct FIBITMAP;
+
+struct Cell {
+	int lower;
+	int upper;
+};
+
 struct Particle {
+	enum class State {
+		NO_MATCH = 0,
+		INCREASING,
+		DECREASING, 
+		SEVER
+	};
 	float x;
 	float y;
 	float z;
 	float i;
+	float peakIntensity;
+	int nContributingParticles;
+	State pState;
+	Particle(float x = -1.f , float y = -1.f, float i = -1.f);
 };
 
 class ParticleStack {
@@ -117,11 +133,14 @@ private:
 	uint32_t m_uMinStackCount;
 	uint32_t m_uMaxStackCount;
 	uint32_t m_uNeighborRadius;
+	uint32_t m_nMaxLevel;
 	cv::Mat m_CircleMask; // on the host for now
 	cv::Mat m_RadXKernel;
 	cv::Mat m_RadYKernel;
 	cv::Mat m_RadSqKernel;
 	std::vector<ParticleStack> m_vFoundParticles;
+	std::vector<Cell> m_GridCells;
+	std::vector<Particle> m_vPrevParticles;
 };
 
 class Engine {
