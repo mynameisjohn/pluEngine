@@ -34,8 +34,9 @@ struct Particle {
 	float i;
 	float peakIntensity;
 	int nContributingParticles;
+	int lastContributingsliceIdx;
 	State pState;
-	Particle(float x = -1.f , float y = -1.f, float i = -1.f);
+	Particle(float x = -1.f , float y = -1.f, float i = -1.f, int idx = -1);
 };
 
 class ParticleStack {
@@ -150,7 +151,7 @@ class Engine {
 	Solver m_ParticleSolver;
 public:
 	Engine();
-	bool Init(std::string stackPath, int startOfStack, int endOfStack);
+	bool Init(std::list<std::string> liStackPaths, int startOfStack, int endOfStack);
 	int Execute();
 
 	BandPass * GetPandPass();

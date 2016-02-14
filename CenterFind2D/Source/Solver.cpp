@@ -4,10 +4,11 @@
 #include <set>
 
 // x, y, i default to -1
-Particle::Particle(float x, float y, float i) :
-z(-1.f),
-peakIntensity(-1.f),
-nContributingParticles(0),
+Particle::Particle(float x, float y, float i, int idx) :
+z(idx),
+peakIntensity(i),
+nContributingParticles(1),
+lastContributingsliceIdx(idx),
 pState(Particle::State::NO_MATCH)
 {
 	this->x = x;
@@ -102,6 +103,13 @@ uint32_t Solver::FindParticles(Datum& D) {
 
 	std::vector<Particle> vNewParticles, vUnmatchedParticles, vSortedParticleVec;
 
+	// Cull the herd a bit
+	int curSliceIdx = D.sliceIdx;
+	m_vPrevParticles.erase(std::remove_if(m_vPrevParticles.begin(), m_vPrevParticles.end(), [curSliceIdx](const Particle& p) {
+		// if the particle is far away and not in a severed state, bail (is this ok?)
+		return (curSliceIdx - p.lastContributingsliceIdx > 2 && p.pState != Particle::State::SEVER);
+	}), m_vPrevParticles.end());
+
 	// We're just doing this on the host for now
 	// so download things here
 	cv::Mat h_Input, h_LocalMax, h_ParticleImg;
@@ -177,13 +185,17 @@ uint32_t Solver::FindParticles(Datum& D) {
 					float x_val = x_offset + float(xIdx);
 					float y_val = y_offset + float(yIdx);
 
-					vNewParticles.emplace_back(x_val, y_val, total_mass);
+					vNewParticles.emplace_back(x_val, y_val, total_mass, D.sliceIdx);
 				}
 			}
 		}
 	}
 
 	for (auto& newParticle : vNewParticles) {
+		// Set this particle's slice idx to the current slice idx
+		newParticle.lastContributingsliceIdx = D.sliceIdx;
+		newParticle.z = (float)D.sliceIdx;
+
 		// Find this particle's cell
 		int cellIdx = pixelToGridIdx(newParticle.x, newParticle.y, N, m);
 		const Cell& cell = m_GridCells[cellIdx];
@@ -227,6 +239,11 @@ uint32_t Solver::FindParticles(Datum& D) {
 				// Ref to potential match
 				Particle& oldParticle = m_vPrevParticles[i];
 
+				// In the original code only the previous slice was scanned, 
+				// so try and uphold that I guess. A distance param is fine too (?)
+				if (D.sliceIdx - oldParticle.lastContributingsliceIdx != 1)
+					continue;
+
 				// We can't have too many particles contributing to the same particle stack
 				if (oldParticle.nContributingParticles > m_uMaxStackCount)
 					continue;
@@ -258,38 +275,50 @@ uint32_t Solver::FindParticles(Datum& D) {
 
 		// If we found a match, handle the intensity state logic
 		if (pBestMatch != nullptr) {
-			// If it's close, handle its intensity state
-			switch (pBestMatch->pState) {
-			case Particle::State::NO_MATCH:
-				// Shouldn't ever get no match, but assign the state and fall through
-				pBestMatch->pState = Particle::State::INCREASING;
-			case Particle::State::INCREASING:
-				// If we're increasing, see if the new guy prompts a decrease
-				if (pBestMatch->i > newParticle.i)
-					pBestMatch->pState = Particle::State::DECREASING;
-				// Otherwise see if we should update the peak intensity
-				else if (newParticle.i > pBestMatch->peakIntensity)
-					pBestMatch->peakIntensity = newParticle.i;
-				break;
-			case Particle::State::DECREASING:
-				// In this case, if it's still decreasing then fall through
-				if (pBestMatch->i > newParticle.i)
-					break;
-				// If we're severing, assing the state and fall through
-				pBestMatch->pState = Particle::State::SEVER;
-			case Particle::State::SEVER:
-				// Continue here (could catch this earlier)
+			// We don't want to particles from the same slice contributing to a previous particle
+			// Note that in my tests this never happens, so I'll probably nix it on the GPU
+			if (pBestMatch->lastContributingsliceIdx == D.sliceIdx)
 				pBestMatch = nullptr;
+			// Otherwise handle intensity state logic
+			else {
+				switch (pBestMatch->pState) {
+				case Particle::State::NO_MATCH:
+					// Shouldn't ever get no match, but assign the state and fall through
+					pBestMatch->pState = Particle::State::INCREASING;
+				case Particle::State::INCREASING:
+					// If we're increasing, see if the new guy prompts a decrease
+					// Should we check to see if more than one particle has contributed?
+					if (pBestMatch->i > newParticle.i)
+						pBestMatch->pState = Particle::State::DECREASING;
+					// Otherwise see if we should update the peak intensity and z position
+					else if (newParticle.i > pBestMatch->peakIntensity) {
+						pBestMatch->peakIntensity = newParticle.i;
+						pBestMatch->z = (float)D.sliceIdx;
+					}
+					break;
+				case Particle::State::DECREASING:
+					// In this case, if it's still decreasing then fall through
+					if (pBestMatch->i > newParticle.i)
+						break;
+					// If we're severing, assing the state and fall through
+					pBestMatch->pState = Particle::State::SEVER;
+				case Particle::State::SEVER:
+					// Continue here (could catch this earlier)
+					pBestMatch = nullptr;
+				}
 			}
 
 			// If we didn't sever and null out above
 			if (pBestMatch != nullptr) {
-
 				// It's a match, bump the particle count and compute an averaged position (?)
 				pBestMatch->nContributingParticles++;
-				//pBestMatch->x = 0.5f * (pBestMatch->x + newParticle.x);
-				//pBestMatch->y = 0.5f * (pBestMatch->y + newParticle.y);
+				pBestMatch->lastContributingsliceIdx = D.sliceIdx;
 
+				// If I don't do the average pos thing, 
+
+				// I don't know about the averaged position thing
+				pBestMatch->x = 0.5f * (pBestMatch->x + newParticle.x);
+				pBestMatch->y = 0.5f * (pBestMatch->y + newParticle.y);
 			}
 		}
 
@@ -298,25 +327,40 @@ uint32_t Solver::FindParticles(Datum& D) {
 			vUnmatchedParticles.push_back(newParticle);
 	}
 
-	// tack on unmatched particles and sort (will be more complicated in thrust)
-	//
-
-	std::sort(vUnmatchedParticles.begin(), vUnmatchedParticles.end(),
+	// tack on unmatched particles and sort (will be more complicated in thrust
+	m_vPrevParticles.insert(m_vPrevParticles.end(), vUnmatchedParticles.begin(), vUnmatchedParticles.end());
+	std::sort(m_vPrevParticles.begin(), m_vPrevParticles.end(), 
 		[N, m](const Particle& a, const Particle& b) {
 		return pixelToGridIdx(a, N, m) < pixelToGridIdx(b, N, m);
 	});
 
-	auto sortIt = m_vPrevParticles.insert(m_vPrevParticles.end(), vUnmatchedParticles.begin(), vUnmatchedParticles.end());
-	std::inplace_merge(m_vPrevParticles.begin(), sortIt, m_vPrevParticles.end(), [N, m](const Particle& a, const Particle& b) {
-		return pixelToGridIdx(a, N, m) < pixelToGridIdx(b, N, m);
-	});
 
-	std::cout << "New Particles:\t" << vNewParticles.size() << "\tUnmatched Particles:\t" << vUnmatchedParticles.size() << "\tFound Particles:\t" << m_vPrevParticles.size() << std::endl;
+	
+	// Because position is being updated, I'm doing the sort above instead of the inplace merge
+	//std::sort(vUnmatchedParticles.begin(), vUnmatchedParticles.end(),
+	//	[N, m](const Particle& a, const Particle& b) {
+	//	return pixelToGridIdx(a, N, m) < pixelToGridIdx(b, N, m);
+	//});
+
+	//auto sortIt = m_vPrevParticles.insert(m_vPrevParticles.end(), vUnmatchedParticles.begin(), vUnmatchedParticles.end());
+	//std::inplace_merge(m_vPrevParticles.begin(), sortIt, m_vPrevParticles.end(), [N, m](const Particle& a, const Particle& b) {
+	//	return pixelToGridIdx(a, N, m) < pixelToGridIdx(b, N, m);
+	//});
+
+
+
+	std::cout << "Slice Idx:\t" << D.sliceIdx << "\tNew Particles:\t" << vNewParticles.size() << "\tUnmatched Particles:\t" << vUnmatchedParticles.size() << "\tFound Particles:\t" << m_vPrevParticles.size() << std::endl;
 
 	return m_vPrevParticles.size();
 }
 
 std::vector<Particle> Solver::GetFoundParticles() const{
+
+	int nParticles = std::count_if(m_vPrevParticles.begin(), m_vPrevParticles.end(), [](const Particle& p) {
+		return p.pState == Particle::State::SEVER && p.nContributingParticles > 2;
+	});
+	std::cout << "Final particle count: " << nParticles << std::endl;
+
 	std::vector<Particle> ret(m_vFoundParticles.size());
 	std::transform(m_vFoundParticles.begin(), m_vFoundParticles.end(), ret.begin(), 
 				   [](const ParticleStack& pS) {return pS.GetRefinedParticle(); });

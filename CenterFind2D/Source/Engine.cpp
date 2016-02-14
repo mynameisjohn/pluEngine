@@ -5,29 +5,36 @@
 
 #include <map>
 
+#include <FreeImage.h>
+
 void getUserParams(Datum D, BandPass * pEngineBP, LocalMax * pEngineLM, Solver * pEngineSolver);
 
 Engine::Engine() {
 }
 
-bool Engine::Init(std::string stackPath, int startOfStack, int endOfStack) {
-	// Attempt to open multibitmap
-	FIMULTIBITMAP * FI_Input = FreeImage_OpenMultiBitmap(FIF_TIFF, stackPath.c_str(), 0, 1, 1, TIFF_DEFAULT);
-	if (FI_Input == nullptr)
-		return false;
+bool Engine::Init(std::list<std::string> liStackPaths, int startOfStack, int endOfStack) {
+	// For each tiff stack
+	int sliceIdx(0);
+	for (auto& stackPath : liStackPaths) {
+		// Attempt to open multibitmap
+		FIMULTIBITMAP * FI_Input = FreeImage_OpenMultiBitmap(FIF_TIFF, stackPath.c_str(), 0, 1, 1, TIFF_DEFAULT);
+		if (FI_Input == nullptr)
+			return false;
 
-	// Read in images, create data
-	int i(0);
-	for (int j = startOfStack; j < endOfStack; j++) {
-		FIBITMAP * image = FreeImage_LockPage(FI_Input, j - 1);
-		m_vData.emplace_back(image, i++);
+		// Read in images, create data
+		int nImages = FreeImage_GetPageCount(FI_Input);
+		for (int j = 0; j < nImages; j++) {
+			if (FIBITMAP * image = FreeImage_LockPage(FI_Input, j - 1))
+				m_vData.emplace_back(image, sliceIdx++);
+			else assert(false); // ?
+		}
+
+		// Close multibitmap
+		FreeImage_CloseMultiBitmap(FI_Input);
 	}
 
 	// Dummy for now
 	m_ParticleSolver = Solver(3, 6, 3, 5, 500);
-
-	// Close multibitmap
-	FreeImage_CloseMultiBitmap(FI_Input);
 }
 
 int Engine::Execute() {
@@ -131,7 +138,7 @@ void getUserParams(Datum D, BandPass * pEngineBP, LocalMax * pEngineLM, Solver *
 	trackBarCallback(0, nullptr);
 
 	// Wait while user sets things until they press a key (any key?)
-	cv::waitKey();
+	//cv::waitKey();
 
 	// Destroy window
 	cv::destroyWindow(windowName);
@@ -139,7 +146,7 @@ void getUserParams(Datum D, BandPass * pEngineBP, LocalMax * pEngineLM, Solver *
 	// Fill in pointers with new items
 	*pEngineBP = BandPass(mapParamValues[gaussRadiusTBName] / trackBarResolution, mapParamValues[hwhmTBName] / trackBarResolution);
 	*pEngineLM = LocalMax(mapParamValues[dilationRadiusTBName] / trackBarResolution, mapParamValues[particleThreshTBName] / trackBarResolution);
-	*pEngineSolver = Solver(3, mapParamValues[gaussRadiusTBName], 3, 5, 5);
+	*pEngineSolver = Solver(3, mapParamValues[gaussRadiusTBName] / trackBarResolution, 3, 5, 8);
 }
 
 void RemapImage(GpuMat& img, float m, float M) {
