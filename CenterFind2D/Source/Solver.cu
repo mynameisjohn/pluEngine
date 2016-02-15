@@ -1,12 +1,37 @@
 #include "CenterFind.h"
-
+#include <iterator>
+#include <algorithm>
 #include <set>
 
-#include <cuda_runtime.h>
+#include <thrust/device_vector.h>
+#include <thrust/device_ptr.h>
 
-#include "ThrustOps.cuh"
+#include <thrust/binary_search.h>
+#include <thrust/sort.h>
 
-// We need to change this so that most of the solving mechanisms are accessible via CUDA
+#include <thrust/copy.h>
+#include <thrust/transform.h>
+#include <thrust/transform.h>
+
+#include <thrust/functional.h>
+
+#include <thrust/iterator/zip_iterator.h>
+#include <thrust/iterator/transform_iterator.h>
+#include <thrust/iterator/counting_iterator.h>
+
+// x, y, i default to -1
+__host__ __device__
+Particle::Particle( float x, float y, float i, int idx ) :
+z( idx ),
+peakIntensity( i ),
+nContributingParticles( 1 ),
+lastContributingsliceIdx( idx ),
+pState( Particle::State::NO_MATCH )
+{
+	this->x = x;
+	this->y = y;
+	this->i = i;
+}
 
 Solver::Solver() :
 m_uMaskRadius( 0 ),
@@ -16,41 +41,9 @@ m_uNeighborRadius( 0 )
 {
 }
 
-
-struct get_int2 : public thrust::unary_function<unsigned int, int2 >
-{
-	int N;
-	get_int2( int n ) :
-		N( n )
-	{
-	}
-	__host__ __device__
-		inline int2 operator()( unsigned int idx )
-	{
-		int x = idx % N;
-		int y = idx / N;;
-		return make_int2( x, y );
-	}
-};
-
-// Kernel for initializing solver kernels...kernel kernel
-__global__
-void createSolverKernels( int radius, float * circ, float * x, float * y, float * sq )
-{
-	// Pretty small sizes here
-	int idx_X = threadIdx.x + blockDim.x * blockIdx.x;
-	int idx_Y = threadIdx.y + blockDim.y * blockIdx.y;
-	int diameter = 2 * radius + 1;
-	int idx = idx_X + idx_Y * diameter;
-
-	x[idx] = idx_X + 1;
-	y[idx] = idx_Y + 1;
-	sq[idx] = powf( x[idx] - idx_X, 2 ) + powf( y[idx] - idx_Y, 2 );
-
-}
-
 Solver::Solver( uint32_t mR, uint32_t fR, uint32_t minSC, uint32_t maxSC, uint32_t nR ) :
 m_uMaskRadius( mR ),
+m_nMaxLevel( 3 ),
 m_uFeatureRadius( fR ),
 m_uMinStackCount( minSC ),
 m_uMaxStackCount( maxSC ),
@@ -58,22 +51,6 @@ m_uNeighborRadius( nR )
 {
 	// Neighbor region diameter
 	int diameter = 2 * m_uMaskRadius + 1;
-
-	// Create GpuMats and initialize via kernel
-	auto makeContinuousGmat = [diameter] () {
-		GpuMat g = cv::cuda::createContinuous( cv::Size( diameter, diameter ), CV_32F );
-		assert( g.isContinuous() && "We need contiguous arrays here" );
-		return g;
-	};
-
-	m_CircleMask = makeContinuousGmat();
-	m_RadXKernel = makeContinuousGmat();
-	m_RadYKernel = makeContinuousGmat();
-	m_RadSqKernel = makeContinuousGmat();
-
-	// make data
-	dim3 gridSize( 1 ), blockSize( diameter, diameter );
-	createSolverKernels << < gridSize, blockSize >> >( (int) m_uMaskRadius, m_CircleMask.ptr<float>(), m_RadSqKernel.ptr<float>(), m_RadYKernel.ptr<float>(), m_RadSqKernel.ptr<float>() );
 
 	// Make host mats
 	cv::Mat h_Circ( cv::Size( diameter, diameter ), CV_32F, 0.f );
@@ -109,222 +86,407 @@ m_uNeighborRadius( nR )
 	cv::multiply( h_RX, h_Circ, h_RX );
 	cv::multiply( h_RY, h_Circ, h_RY );
 
-	auto helper = [] ( cv::Mat& m ) {
-		GpuMat g = cv::cuda::createContinuous( m.size(), m.type() );
-		if ( g.isContinuous() == false )
-		{
-			// ruh roh
-		}
-		// copy memory
-		return g;
-	};
-
-	// Create contiguous GPU Mats for these
-
-	m_CircleMask = cv::cuda::createContinuous( h_Circ.size(), h_Circ.type() );
-
-	// copy these to contiguous GpuMats
-	m_CircleMask.upload( h_Circ );
-	m_RadXKernel.upload( h_RX );
-	m_RadYKernel.upload( h_RY );
-	m_RadSqKernel.upload( h_R2 );
-
+	// Upload to gpu mats
+	m_dCircleMask.upload( h_Circ );
+	m_dRadXKernel.upload( h_RX );
+	m_dRadYKernel.upload( h_RY );
+	m_dRadSqKernel.upload( h_R2 );
 }
-
-#include <thrust/host_vector.h>
-#include <thrust/device_vector.h>
-#include <thrust/functional.h>
-#include <thrust/transform.h>
-#include <thrust/iterator/zip_iterator.h>
-#include <thrust/random.h>
-#include <thrust/copy.h>
-#include <thrust/tabulate.h>
-#include <thrust/sort.h>
-#include <thrust/binary_search.h>
-
-struct is_nonzero : public thrust::unary_function<thrust::tuple<unsigned char, int2>, bool >
-{
-	__host__ __device__
-		inline bool operator()( const thrust::tuple<unsigned char, int2>& t )
-	{
-		return t.get<0>() != 0;
-	}
-};
 
 __host__ __device__
-int pLoc2Zcode( float2 pLoc, int max_level, int N )
+int pixelToGridIdx( float x, float y, int N, int m )
 {
-	float xMin = 0, yMin = 0, xMax = N, yMax = N;
+	const int cellSize = N >> m;
+	const int cellCount = N / cellSize;
 
-	int result = 0;
+	int cellX = x / cellSize;
+	int cellY = y / cellSize;
 
-	for ( int level = 1; level <= max_level; level++ )
-	{
-		// Classify in x-direction
-		float xmid = 0.5f * ( xMin + xMax );
-		int x_hi_half = ( p.x < xmid ) ? 0 : 1;
-
-		// Push the bit into the result as we build it
-		result |= x_hi_half;
-		result <<= 1;
-
-		// Classify in y-direction
-		float ymid = 0.5f * ( yMin + yMax );
-		int y_hi_half = ( p.y < ymid ) ? 0 : 1;
-
-		// Push the bit into the result as we build it
-		result |= y_hi_half;
-		result <<= 1;
-
-		// Shrink the bounding box, still encapsulating the point
-		xMin = ( x_hi_half ) ? xmid : xMin;
-		xMax = ( x_hi_half ) ? xMax : xmid;
-		yMin = ( y_hi_half ) ? ymid : yMin;
-		yMax = ( y_hi_half ) ? yMax : ymid;
-	}
-
-	result >>= 1;
-	return result;
+	int cellIdx = cellX + cellCount * cellY;
+	return cellIdx;
 }
 
-struct Particle
+__host__ __device__
+int pixelToGridIdx( Particle p, int N, int m )
 {
-	float2 pos;
-	float intensity;
-	int zCode;
+	return pixelToGridIdx( p.x, p.y, N, m );
+}
+
+struct PixelToGridIdx : public thrust::unary_function < Particle, int >
+{
+	int N; // Image size
+	int M; // division level
+
+	PixelToGridIdx( int n, int m ) :N( n ), M( m ) {}
 
 	__host__ __device__
-	Particle( float2 p, float i, int z ) :
-		pos( p ),
-		intensity( i ),
-		zCode( z )
+	int operator()( const Particle& p )
 	{
+		return pixelToGridIdx( p.x, p.y, N, M );
 	}
 };
 
-struct ParticleComp
+struct IsParticleAtIdx
 {
+	int N;
+	int kernelRad;
+	IsParticleAtIdx( int n, int k ) : N( n ), kernelRad(k) {}
+
+	template <typename tuple_t>
 	__host__ __device__
-	bool operator()( Particle a, Particle b )
+	bool operator()( tuple_t T )
 	{
-		return a.zCode < b.zCode;
+		unsigned char val = thrust::get<0>( T );
+		int idx = thrust::get<1>( T );
+		int x = idx % N;
+		int y = idx / N;
+		
+		// We care if the pixel is nonzero and its within the kernel radius
+		return ( val != 0 ) && ( x > kernelRad ) && ( y > kernelRad ) && ( x + kernelRad < N ) && ( y + kernelRad < N );
 	}
 };
 
-// This is the second filter; once we know a particle is non-zero, we have to do a local sum around it
-// to determine its "mass" (or intensity, not really sure)
-struct GetParticle
+struct MakeParticleFromIdx
 {
-	// Kernel Radius
-	int kernelRadius;
-
-	// Image dimensions
+	int sliceIdx;
+	int kernelRad;
 	int N;
 
-	// offset kernels
-	float * circKernel;
-	float * xKernel;
-	float * yKernel;
-	float * sqKernel;
-
-	// The actual reference images we multiply against
 	float * lmImg;
+	float * circKernel;
+	float * rxKernel;
+	float * ryKernel;
+	float * rSqKernel;
 
-	__host__ __device__
-	GetParticle( int kD, int N, float * lmImg, float * cK, float * xK, float * yK, float * sqK ) :
-		kernelRadius( kD ),
-		N( N ),
-		lmImg( lmImg ),
+	MakeParticleFromIdx( int sIdx, int n, int kRad, float * lm, float * cK, float * xK, float * yK, float * sqK ) :
+		sliceIdx( sIdx ),
+		N(n),
+		kernelRad(kRad),
+		lmImg( lm ),
 		circKernel( cK ),
-		xKernel( xK ),
-		yKernel( yK ),
-		sqKernel( sqK )
+		rxKernel( xK ),
+		ryKernel( yK ),
+		rSqKernel( sqK )
 	{
 	}
-	
 
+	template <typename tuple_t>
 	__host__ __device__
-	Particle operator()( int idx )
+	Particle operator()( tuple_t T )
 	{
-		// This would be the 2-d pixel location
-		int2 loc2D = get_int2( N )( idx );
+		unsigned char val = thrust::get<0>( T );
+		int idx = thrust::get<1>( T );
+		int x = idx % N;
+		int y = idx / N;
 
-		// Center of the sum region
-		float * center = &lmImg[idx];
 		float total_mass( 0 );
-		float x_Offset( 0 ), y_Offset( 0 ), sq_Offset( 0 );
+		float x_offset( 0 ), y_offset( 0 );
 
-		// I need to do the arithmetic that lets me loop through the square around center
+		float * tmpCircKernPtr = circKernel;
+		float * tmpXKernPtr = rxKernel;
+		float * tmpYKernPtr = ryKernel;
 
-		// Get the total mass and unnormalized x,y,sq offsets
-		for ( int i = 0; i < 2 * kernelRadius + 1; i++ )
+		for ( int iY = -kernelRad; iY <= kernelRad; iY++ )
 		{
-			total_mass += circKernel[i] * center[i];
-			x_Offset += xKernel[i] * center[i];
-			y_Offset += yKernel[i] * center[i];
-			sq_Offset += sqKernel[i] * center[i];
+			// For y, go down then up
+			float * ptrY = &lmImg[idx - ( N * iY )];
+			for ( int iX = -kernelRad; iX <= kernelRad; iX++ )
+			{
+				// Get the local max img value
+				float lmImgVal = ptrY[iX]; 
+
+				// Multiply by kernel, sum, advance kernel pointer
+				total_mass += lmImgVal * ( *tmpCircKernPtr++ );
+				x_offset += lmImgVal * ( *tmpXKernPtr++ );
+				y_offset += lmImgVal * ( *tmpYKernPtr++ );
+			}
 		}
 
-		x_Offset /= total_mass;
-		y_Offset /= total_mass;
-		sq_Offset /= total_mass;
+		float x_val = float(x) + x_offset / total_mass;
+		float y_val = float(y) + y_offset / total_mass;
 
-		// Compute x,y positions
-		float xVal = x_Offset + loc2D.x;
-		float yVal = x_Offset + loc2D.y;
-		float r2_val = sq_Offset;
-
-		// particle location and z code
-		float2 pLoc = make_float2( xVal, yVal );
-		int zCode = pLoc2Zcode( pLoc, 3, N );
-
-		// Construct and return particle
-		Particle p( pLoc, total_mass, zCode );
+		Particle p( x_val, y_val, total_mass, sliceIdx );
 		return p;
+	}
+};
+
+struct ParticleMatcher
+{
+	int N;
+	int M;
+	int sliceIdx;
+	int maxStackCount;
+	float neighborRadius;
+
+	int * cellLowerBound;
+	int * cellUpperBound;
+
+	Particle* prevParticles;
+
+	ParticleMatcher( int n, int m, int s, int mSC, int nR, int * cLB, int * cUB, Particle * pP ) :
+		N( n ),
+		M( m ),
+		sliceIdx( s ),
+		maxStackCount( mSC ),
+		neighborRadius( nR ),
+		cellLowerBound( cLB ),
+		cellUpperBound( cUB ),
+		prevParticles( pP )
+	{
+	}
+
+	// Returns null if no match is found
+	__host__ __device__
+	Particle * operator()( Particle newParticle )
+	{
+		// There are a total of 9 cells we might have to search. last is sentinel
+		int cellIndices[10]{ -1 };
+
+		// But we always search at least one
+		cellIndices[0] = pixelToGridIdx( newParticle, N, M );
+
+		// Neighbors to follow
+		Particle * pBestMatch = nullptr;
+		for ( int c = 0; cellIndices[c] >= 0; c++ )
+		{
+			// It would be nice to parallelize around this, but probably not worth it
+			int cellIdx = cellIndices[c];
+			int lower = cellLowerBound[cellIdx];
+			int upper = cellUpperBound[cellIdx];
+			for ( int p = lower; p < upper; p++ )
+			{
+				Particle& oldParticle = prevParticles[p];
+
+				// tooFar might not be necessary if I cull beforehand
+				bool tooFar = ( sliceIdx - oldParticle.lastContributingsliceIdx != 1 );
+				bool tooMany = ( oldParticle.nContributingParticles > maxStackCount );
+				bool alreadyDone = ( oldParticle.pState == Particle::State::SEVER );
+				if ( tooFar || tooMany || alreadyDone )
+					continue;
+
+				// See if the particle is within our range
+				float dX = oldParticle.x - newParticle.x;
+				float dY = oldParticle.y - newParticle.y;
+				float distSq = pow( dX, 2 ) + pow( dY, 2 );
+
+				if ( distSq < neighborRadius * neighborRadius )
+				{
+					// If there already was a match, see if this one is better
+					if ( pBestMatch )
+					{
+						// Find the old distance
+						dX = pBestMatch->x - newParticle.x;
+						dY = pBestMatch->y - newParticle.y;
+
+						// If this one is closer, assign it as the match
+						if ( pow( dX, 2 ) + pow( dY, 2 ) > distSq )
+							pBestMatch = &oldParticle;
+					}
+					else 
+						pBestMatch = &oldParticle;
+				}
+			}
+		}
+
+		// Could check sever state here
+
+		return pBestMatch;
+	}
+};
+
+struct CheckIfMatchIsNotNull
+{
+	template <typename tuple_t>
+	__host__ __device__
+	bool operator()( const tuple_t T )
+	{
+		Particle * pMatch = thrust::get<1>( T );
+		return pMatch != nullptr;
+	}
+};
+
+// This gets called on matched particles and handles intensity state logic
+// You should ensure this is thread safe beforehand, somehow (remove duplicates? not really sure)
+struct UpdateMatchedParticle
+{
+	int sliceIdx;
+
+	UpdateMatchedParticle( int s ) : sliceIdx( s ) {}
+
+	// This kind of thing could be parallelized in a smarter way, probably
+	template <typename tuple_t>
+	__host__ __device__
+	int operator()( const tuple_t T )
+	{
+		Particle newParticle = thrust::get<0>( T );
+		Particle * pBestMatch = thrust::get<1>( T );
+		switch ( pBestMatch->pState )
+		{
+			case Particle::State::NO_MATCH:
+				// Shouldn't ever get no match, but assign the state and fall through
+				pBestMatch->pState = Particle::State::INCREASING;
+			case Particle::State::INCREASING:
+				// If we're increasing, see if the new guy prompts a decrease
+				// Should we check to see if more than one particle has contributed?
+				if ( pBestMatch->i > newParticle.i )
+					pBestMatch->pState = Particle::State::DECREASING;
+				// Otherwise see if we should update the peak intensity and z position
+				else if ( newParticle.i > pBestMatch->peakIntensity )
+				{
+					pBestMatch->peakIntensity = newParticle.i;
+					pBestMatch->z = (float) sliceIdx;
+				}
+				break;
+			case Particle::State::DECREASING:
+				// In this case, if it's still decreasing then fall through
+				if ( pBestMatch->i > newParticle.i )
+					break;
+				// If we're severing, assing the state and fall through
+				pBestMatch->pState = Particle::State::SEVER;
+
+				// I could probably catch this earlier
+			case Particle::State::SEVER:
+				// Continue here (could catch this earlier)
+				pBestMatch = nullptr;
+		}
+
+		// could do this in yet another call, if you were so inclined
+		// If we didn't sever and null out above
+		if ( pBestMatch != nullptr )
+		{
+			// It's a match, bump the particle count and compute an averaged position (?)
+			pBestMatch->nContributingParticles++;
+			pBestMatch->lastContributingsliceIdx = sliceIdx;
+
+			// I don't know about the averaged position thing
+			pBestMatch->x = 0.5f * ( pBestMatch->x + newParticle.x );
+			pBestMatch->y = 0.5f * ( pBestMatch->y + newParticle.y );
+		}
+
+		return 0;
+	}
+};
+
+struct IsParticleUnmatched
+{
+	__host__ __device__
+	bool operator()( const Particle p )
+	{
+		return p.pState == Particle::State::NO_MATCH;
+	}
+};
+
+struct ParticleOrderingComp
+{
+	int N, M;
+	ParticleOrderingComp( int n, int m ) : N( n ), M( m ) {}
+
+	__host__ __device__
+	bool operator()( const Particle a, const Particle b )
+	{
+		return pixelToGridIdx( a, N, M ) < pixelToGridIdx( b, N, M );
+	}
+};
+
+struct MaybeRemoveParticle
+{
+	int sliceIdx;
+	int minSlices;
+	MaybeRemoveParticle( int s, int m ) : sliceIdx( s ), minSlices( m ) {}
+
+	__host__ __device__
+	bool operator()(const Particle p)
+	{
+		return ( sliceIdx - p.lastContributingsliceIdx > 2 && ( p.pState != Particle::State::SEVER || p.nContributingParticles < minSlices ) );
 	}
 };
 
 uint32_t Solver::FindParticles( Datum& D )
 {
-	// The particle image is contiguous, so let's find all particle locations and store their index in the image
-	int N = D.d_ParticleImg.size().area();
-	thrust::device_vector<int> d_ParticleIndices( N );
+	const int N = D.d_LocalMaxImg.rows;
+	const int m = m_nMaxLevel;
+	const int cellSize = N >> m;
+	const int cellCount = N / cellSize;
+	const int nTotalCells = cellCount * cellCount;
 
-	// First make a device vector out of the existing particle image
-	thrust::device_ptr<unsigned char> d_ParticleImgPtr( D.d_ParticleImg.ptr() );
-	thrust::device_vector<unsigned char> d_ParticleImgVec( d_ParticleImgPtr, d_ParticleImgPtr + N );
+	// Make device pointers to the kernels used in particle solving and the localmax img
+	using dFloatptr = thrust::device_ptr < float > ;
+	dFloatptr d_pLocalMaxImgBuf( D.d_LocalMaxImg.ptr<float>() );
+	dFloatptr d_pCirleKernel( m_dCircleMask.ptr<float>() );
+	dFloatptr d_pRxKernel( m_dRadXKernel.ptr<float>() );
+	dFloatptr d_pRyKernel( m_dRadYKernel.ptr<float>() );
+	dFloatptr d_pR2Kernel( m_dRadSqKernel.ptr<float>() );
 
-	// Now we must zip the iterators such that every time we find a non-zero particle pixel, we're also given its location
-	auto locFindItBegin = thrust::make_zip_iterator( thrust::make_tuple( d_ParticleImgVec.begin(), thrust::counting_iterator<int>(0) ) );
-	auto locFindItEnd = thrust::make_zip_iterator( thrust::make_tuple( d_ParticleImgVec.end(), thrust::counting_iterator<int>( N ) ) );
+	// Cull the herd
+	int minSlices = 3;
+	auto itLastPrevParticle = thrust::remove_if( md_PrevParticleVec.begin(), md_PrevParticleVec.end(), MaybeRemoveParticle( D.sliceIdx, minSlices ) );
+
+	// Make a device vector out of the particle buffer pointer (it's contiguous)
+	thrust::device_ptr<unsigned char> d_pParticleImgBuf( D.d_ParticleImg.ptr<unsigned char>() );
+	thrust::device_vector<unsigned char> d_ParticleImgVec( d_pParticleImgBuf, d_pParticleImgBuf + D.d_ParticleImg.size().area() );
+
+	// For each pixel in the particle image, we care if it's nonzero and if it's far enough from the edges
+	// So we need its index (transformable into twoD pos) and its value
+	auto itDetectParticleBegin = thrust::make_zip_iterator( thrust::make_tuple( d_ParticleImgVec.begin(), thrust::counting_iterator<int>( 0 ) ) );
+	auto itDetectParticleEnd = thrust::make_zip_iterator( thrust::make_tuple( d_ParticleImgVec.end(), thrust::counting_iterator<int>( N ) ) );
+
+	// Do a stream compaction to get the nonzero particle locations
+	// This vector is far too large, but I guess that's ok (you can keep it static in mem if you want)
+	thrust::device_vector<Particle> d_NewParticleVec( N );
+	auto itLastNewParticle = thrust::transform_if( itDetectParticleBegin, itDetectParticleEnd, d_NewParticleVec.begin(),
+												   MakeParticleFromIdx( D.sliceIdx, N, m_uFeatureRadius, d_pLocalMaxImgBuf.get(), d_pCirleKernel.get(), d_pRxKernel.get(), d_pRyKernel.get(), d_pR2Kernel.get() ),
+												   IsParticleAtIdx( N, m_uFeatureRadius ) );
+	int newParticleCount = itLastNewParticle - d_NewParticleVec.begin();
+
+	// The grid cell vec might be split into two vecs like this (they should also be class members, but I'll do that later)
+	thrust::device_vector<int> d_GridCellLowerBoundsVec( nTotalCells ), d_GridCellUpperBoundsVec( nTotalCells );
+
+	// Initialize grid cells
+	using particleIter = thrust::device_vector<Particle>::iterator;
+	using pixelToGridIdxIter = thrust::transform_iterator < PixelToGridIdx, particleIter > ;
+
+	pixelToGridIdxIter itPrevParticleBegin = thrust::make_transform_iterator<PixelToGridIdx, particleIter>( md_PrevParticleVec.begin(), PixelToGridIdx( N, m ) );
+	pixelToGridIdxIter itPrevParticleEnd = thrust::make_transform_iterator<PixelToGridIdx, particleIter>( itLastPrevParticle, PixelToGridIdx( N, m ) );
+
+	thrust::lower_bound( itPrevParticleBegin, itPrevParticleEnd, thrust::counting_iterator<int>( 0 ), thrust::counting_iterator<int>( nTotalCells ), d_GridCellLowerBoundsVec.begin() );
+	thrust::upper_bound( itPrevParticleBegin, itPrevParticleEnd, thrust::counting_iterator<int>( 0 ), thrust::counting_iterator<int>( nTotalCells ), d_GridCellUpperBoundsVec.begin() );
 	
-	// The output iterator throws away the unsigned char img pixel values using a discard iterator, so we're left with the int2s
-	auto locFindItOutput = thrust::make_zip_iterator( thrust::make_tuple( thrust::discard_iterator<>(), d_ParticleIndices.begin() ) );
 
-	// Stream compact locations
-	auto lastParticleIt = thrust::copy_if( locFindItBegin, locFindItEnd, locFindItOutput, is_nonzero() ); // is this legit? if not is_nonzero() works
-	size_t numParticles = lastParticleIt - locFindItOutput;
+	// Tranform new particles into a vector of particle pointers; if they are null then no match was found (?)
+	thrust::device_vector<Particle *> d_ParticleMatchVec( newParticleCount );
+	// Note that I'm using itLastNewParticle
+	thrust::transform( d_NewParticleVec.begin(), itLastNewParticle, d_ParticleMatchVec.begin(),
+					   ParticleMatcher( N, m, D.sliceIdx, m_uMaxStackCount, m_uNeighborRadius, d_GridCellLowerBoundsVec.data().get(), d_GridCellUpperBoundsVec.data().get(), md_PrevParticleVec.data().get() ) );
 
-	// Also, if you ever decide to display the particle locations on an image, here are the 2-d locations
-	thrust::device_vector<int2> d_2DParticleLocations( numParticles );
-	thrust::transform( d_ParticleIndices.begin(), d_ParticleIndices.end(), d_2DParticleLocations.begin(), get_int2( sqrt( N + 0.1 ) ) );
+	// Zip the pointer vec and newparticle vec
+	auto itNewParticleToMatchedParticleBegin = thrust::make_zip_iterator( thrust::make_tuple( d_NewParticleVec.begin(), d_ParticleMatchVec.begin() ) );
+	auto itNewParticleToMatchedParticleEnd = thrust::make_zip_iterator( thrust::make_tuple( itLastNewParticle, d_ParticleMatchVec.end() ) );
 
-	// For each newly found particle, we can now transform it into a real particle
-	// In order to do that we'll need some info about the lm img
-	float * lmImg = D.d_LocalMaxImg.ptr<float>();
-	float * circKern = m_CircleMask.ptr<float>();
-	float * xKern = m_RadXKernel.ptr<float>();
-	float * yKern = m_RadYKernel.ptr<float>();
-	float * sqKern = m_RadSqKernel.ptr<float>();
-	GetParticle gPOp( (int)m_uMaskRadius, (int)sqrt( N + 0.1 ), lmImg, circKern, xKern, yKern, sqKern );
-	thrust::device_vector<Particle> d_ParticleVec( numParticles );
-	thrust::transform( d_ParticleIndices.begin(), d_ParticleIndices.end(), d_ParticleVec.begin(), gPOp );
+	// If there was a match, update the intensity state. I don't know how to do a for_each_if other than a transform_if that discards the output
+	thrust::transform_if( itNewParticleToMatchedParticleBegin, itNewParticleToMatchedParticleEnd, thrust::discard_iterator<>(), UpdateMatchedParticle( D.sliceIdx ), CheckIfMatchIsNotNull() );
 
-	// This is a dummy vector that would contain all previously found particles (a work in progress), sorted by their z-code
-	thrust::device_vector<Particle> d_PreviouslyFoundParticleVec;
+	// Tack the unmatched particles onto the endof the vector and sort the whole thing (do this with a merge). Reassign iterator to new end
+	itLastPrevParticle = thrust::copy_if( d_NewParticleVec.begin(), d_NewParticleVec.end(), itLastPrevParticle, IsParticleUnmatched() );
 
-	// Find the range of previously found particles that could match our newly found particles
-	thrust::device_vector<int> d_PrevParticleLB( numParticles ), d_PrevParticleUB( numParticles );
-	thrust::lower_bound( d_PreviouslyFoundParticleVec.begin(), d_PreviouslyFoundParticleVec.end(), d_PreviouslyFoundParticleVec.begin(), d_PreviouslyFoundParticleVec.end(), ParticleComp() );
-	thrust::upper_bound( d_PreviouslyFoundParticleVec.begin(), d_PreviouslyFoundParticleVec.end(), d_PreviouslyFoundParticleVec.begin(), d_PreviouslyFoundParticleVec.end(), ParticleComp() );
+	// Note that the above won't work, since the output vec must be resized. You need to get that count somewhere along the way, or oversize
+
+	// Sort the new collection
+	thrust::sort( md_PrevParticleVec.begin(), itLastPrevParticle, ParticleOrderingComp( N, m ) );
+
+	return md_PrevParticleVec.size();
+}
+
+std::vector<Particle> Solver::GetFoundParticles() const
+{
+
+	//int nParticles = std::count_if( m_vPrevParticles.begin(), m_vPrevParticles.end(), [] ( const Particle& p ) {
+	//	return p.pState == Particle::State::SEVER && p.nContributingParticles > 2;
+	//} );
+	//std::cout << "Final particle count: " << nParticles << std::endl;
+
+	std::vector<Particle> ret;
+	//( m_vFoundParticles.size() );
+	//std::transform( m_vFoundParticles.begin(), m_vFoundParticles.end(), ret.begin(),
+	//				[] ( const ParticleStack& pS ) {return pS.GetRefinedParticle(); } );
+	return ret;
 }
