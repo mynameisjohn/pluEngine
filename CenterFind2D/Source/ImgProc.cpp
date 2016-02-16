@@ -54,12 +54,14 @@ sliceIdx(sliceIdx) {
 	d_InputImg.upload(image);
 	// Initialize all other mats to zero on device (may be superfluous)
 	d_FilteredImg = GpuMat(d_InputImg.size(), CV_32F, 0.f);
-	d_DilateImg = GpuMat(d_InputImg.size(), CV_32F, 0.f);
-	d_LocalMaxImg = GpuMat(d_InputImg.size(), CV_32F, 0.f);
+	d_DilateImg = GpuMat(d_InputImg.size(), CV_32F, 0.f);	
 	d_TmpImg = GpuMat(d_InputImg.size(), CV_32F, 0.f);
 
-	// It's in our best interest to ensure this is continuous
-	cv::cuda::createContinuous(d_InputImg.size(), CV_8U, d_ParticleImg);
+	// It's in our best interest to ensure these are continuous
+	cv::cuda::createContinuous( d_InputImg.size(), CV_32F, d_LocalMaxImg );
+	d_LocalMaxImg.setTo( 0.f );
+
+	cv::cuda::createContinuous( d_InputImg.size(), CV_8U, d_ParticleImg);
 	d_ParticleImg.setTo(0);
 }
 
@@ -128,6 +130,16 @@ void BandPass::Execute(Datum& D) {
 	cv::cuda::threshold(bp, bp, 0, 1, cv::THRESH_TOZERO);
 }
 
+uint32_t BandPass::GetGaussianRadius() const
+{
+	return m_uGaussianRadius;
+}
+
+float BandPass::GetHalfWidthHalfModulation() const
+{
+	return m_fHWHM;
+}
+
 LocalMax::LocalMax() :
 ImgOperator(),
 m_uDilationRadius(0),
@@ -168,4 +180,14 @@ void LocalMax::Execute(Datum& D) {
 	cv::cuda::exp( lm, lm );
 	cv::cuda::threshold( lm, lm, 1 - kEpsilon, 1, cv::THRESH_BINARY );
 	lm.convertTo( D.d_ParticleImg, CV_8U );
+}
+
+uint32_t LocalMax::GetDilationRadius() const
+{
+	return m_uDilationRadius;
+}
+
+float LocalMax::GetParticleThreshold() const
+{
+	return m_fPctleThreshold;
 }

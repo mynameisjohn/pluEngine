@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <vector>
 #include <list>
+#include <memory>
 
 using cv::cuda::GpuMat;
 
@@ -16,49 +17,26 @@ void DisplayImage(GpuMat& img);
 // Forward for freeimage type
 struct FIBITMAP;
 
-struct Cell {
-	int lower;
-	int upper;
-};
-
-struct Particle {
-	enum class State {
-		NO_MATCH = 0,
-		INCREASING,
-		DECREASING, 
-		SEVER
-	};
-	float x;
-	float y;
-	float z;
-	float i;
-	float peakIntensity;
-	int nContributingParticles;
-	int lastContributingsliceIdx;
-	State pState;
-	Particle(float x = -1.f , float y = -1.f, float i = -1.f, int idx = -1);
-};
-
-class ParticleStack {
-	uint32_t m_uParticleCount;
-	uint32_t m_uLastSliceIdx;
-	float m_fMaxPeak;
-	std::list<Particle> m_liContributingParticles;
-public:
-	ParticleStack();
-	ParticleStack(Particle first, uint32_t sliceIdx);
-	uint32_t AddParticle(Particle p, uint32_t sliceIdx);
-	Particle GetRefinedParticle() const;
-	uint32_t GetParticleCount() const;
-	Particle GetLastParticleAdded() const;
-	float GetPeak() const;
-	uint32_t GetLastSliceIdx() const;
-
-	// Comparison operator
-	struct comp {
-		bool operator()(const ParticleStack& a, const ParticleStack& b);
-	};
-};
+//class ParticleStack {
+//	uint32_t m_uParticleCount;
+//	uint32_t m_uLastSliceIdx;
+//	float m_fMaxPeak;
+//	std::list<Particle> m_liContributingParticles;
+//public:
+//	ParticleStack();
+//	ParticleStack(Particle first, uint32_t sliceIdx);
+//	uint32_t AddParticle(Particle p, uint32_t sliceIdx);
+//	Particle GetRefinedParticle() const;
+//	uint32_t GetParticleCount() const;
+//	Particle GetLastParticleAdded() const;
+//	float GetPeak() const;
+//	uint32_t GetLastSliceIdx() const;
+//
+//	// Comparison operator
+//	struct comp {
+//		bool operator()(const ParticleStack& a, const ParticleStack& b);
+//	};
+//};
 
 struct Datum {
 	int sliceIdx;
@@ -93,6 +71,9 @@ public:
 	BandPass();
 	BandPass(int radius, float hwhm);
 	void Execute(Datum& data) override;
+
+	uint32_t GetGaussianRadius() const;
+	float GetHalfWidthHalfModulation() const;
 private:
 	uint32_t m_uGaussianRadius;
 	float m_fHWHM;
@@ -111,6 +92,9 @@ public:
 	LocalMax();
 	LocalMax(int radius, float pctl_thresh);
 	void Execute(Datum& data) override;
+
+	uint32_t GetDilationRadius() const;
+	float GetParticleThreshold() const;
 private:
 	uint32_t m_uDilationRadius;
 	float m_fPctleThreshold;
@@ -122,35 +106,40 @@ public:
 	void SetParticleThreshold(float pthresh);
 };
 
-class Solver {
-public:
-	Solver();
-	Solver(uint32_t mR, uint32_t fR, uint32_t minSC, uint32_t maxSC, uint32_t nR);
-	uint32_t FindParticles(Datum& D);
-	std::vector<Particle> GetFoundParticles() const;
-private:
-	uint32_t m_uMaskRadius;
-	uint32_t m_uFeatureRadius;
-	uint32_t m_uMinStackCount;
-	uint32_t m_uMaxStackCount;
-	uint32_t m_uNeighborRadius;
-	uint32_t m_nMaxLevel;
-	cv::Mat m_CircleMask; // on the host for now
-	cv::Mat m_RadXKernel;
-	cv::Mat m_RadYKernel;
-	cv::Mat m_RadSqKernel;
-	std::vector<ParticleStack> m_vFoundParticles;
-	std::vector<Cell> m_GridCells;
-	std::vector<Particle> m_vPrevParticles;
-};
+class Solver;
+
+// Forwarded because of thrust
+//class Solver {
+//public:
+//	Solver();
+//	Solver(uint32_t mR, uint32_t fR, uint32_t minSC, uint32_t maxSC, uint32_t nR);
+//	uint32_t FindParticles(Datum& D);
+//	std::vector<Particle> GetFoundParticles() const;
+//private:
+//	uint32_t m_uMaskRadius;
+//	uint32_t m_uFeatureRadius;
+//	uint32_t m_uMinStackCount;
+//	uint32_t m_uMaxStackCount;
+//	uint32_t m_uNeighborRadius;
+//	uint32_t m_nMaxLevel;
+//	GpuMat m_dCircleMask; // on the host for now
+//	GpuMat m_dRadXKernel;
+//	GpuMat m_dRadYKernel;
+//	GpuMat m_dRadSqKernel;
+//
+//	thrust::device_vector<Particle> md_PrevParticleVec;
+//};
 
 class Engine {
 	std::vector<Datum> m_vData;
 	BandPass m_fnBandPass;
 	LocalMax m_fnLocalMax;
-	Solver m_ParticleSolver;
+	std::unique_ptr<Solver> m_ParticleSolver;
+
+	void getUserParams( Datum D, BandPass * pEngineBP, LocalMax * pEngineLM );
 public:
 	Engine();
+	~Engine();
 	bool Init(std::list<std::string> liStackPaths, int startOfStack, int endOfStack);
 	int Execute();
 
