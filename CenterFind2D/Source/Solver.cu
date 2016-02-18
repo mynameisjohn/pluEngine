@@ -449,7 +449,7 @@ uint32_t Solver::FindParticles( Datum& D )
 	// Then, if the particle fits our criteria, we copy its index (from the counting iterator) into this vector, and discard the uchar
 	dIntVec d_NewParticleIndicesVec( N*N );
 	auto itFirstNewParticle = thrust::make_zip_iterator( thrust::make_tuple( thrust::discard_iterator<>(), d_NewParticleIndicesVec.begin() ) );
-	auto itLastNewParticle = thrust::copy_if( itDetectParticleBegin, itDetectParticleEnd, itFirstNewParticle, IsParticleAtIdx( N, m_uMaskRadius ) );
+	auto itLastNewParticle = thrust::copy_if( itDetectParticleBegin, itDetectParticleEnd, itFirstNewParticle, IsParticleAtIdx( N, m_uFeatureRadius ) );
 	size_t newParticleCount = itLastNewParticle - itFirstNewParticle;
 
 	// Now transform each index into a particle by looking at values inside the lmimg and using the kernels
