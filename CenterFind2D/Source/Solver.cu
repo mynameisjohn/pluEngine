@@ -57,30 +57,22 @@ m_uCurPrevParticleCount( 0 )
 
 	// Make host mats
 	cv::Mat h_Circ( cv::Size( diameter, diameter ), CV_32F, 0.f );
-	cv::Mat h_RX = h_Circ;
-	cv::Mat h_RY = h_Circ;
-	cv::Mat h_R2 = h_Circ;
+	cv::Mat h_RX( cv::Size( diameter, diameter ), CV_32F, 0.f );
+	cv::Mat h_RY( cv::Size( diameter, diameter ), CV_32F, 0.f );
+	cv::Mat h_R2( cv::Size( diameter, diameter ), CV_32F, 0.f );
 
 	// set up circle mask
 	cv::circle( h_Circ, cv::Point( m_uMaskRadius, m_uMaskRadius ), m_uMaskRadius, 1.f, -1 );
 
 	// set up Rx and part of r2
-	for ( int i = 0; i < diameter; i++ )
+	for ( int y = 0; y < diameter; y++ )
 	{
-		for ( int j = 0; j < diameter; j++ )
+		for ( int x = 0; x < diameter; x++ )
 		{
-			h_RX.at<float>( i, j ) = float( j + 1 );
-			h_R2.at<float>( i, j ) += float( pow( j - m_uMaskRadius, 2 ) );
-		}
-	}
-
-	// set up Ry and the rest of r2
-	for ( int i = 0; i < diameter; i++ )
-	{
-		for ( int j = 0; j < diameter; j++ )
-		{
-			h_RY.at<float>( i, j ) = float( i + 1 );
-			h_R2.at<float>( i, j ) += float( pow( i - m_uMaskRadius, 2 ) );
+			cv::Point p( x, y );
+			h_RX.at<float>( p ) = x + 1;
+			h_RY.at<float>( p ) = y + 1;
+			h_R2.at<float>( p ) = pow( -(float) m_uMaskRadius + x, 2 ) + pow( -(float) m_uMaskRadius + y, 2 );
 		}
 	}
 
@@ -90,10 +82,10 @@ m_uCurPrevParticleCount( 0 )
 	cv::multiply( h_RY, h_Circ, h_RY );
 
 	// Upload to gpu mats
-	m_dCircleMask = h_Circ;
-	m_dRadXKernel = h_RX;
-	m_dRadYKernel = h_RY;
-	m_dRadSqKernel = h_R2;
+	h_Circ.copyTo( m_dCircleMask );
+	h_RX.copyTo( m_dRadXKernel );
+	h_RY.copyTo( m_dRadYKernel );
+	h_R2.copyTo( m_dRadSqKernel );
 
 	//m_dCircleMask.upload( h_Circ );
 	//m_dRadXKernel.upload( h_RX );
@@ -181,16 +173,20 @@ struct MakeParticleFromIdx
 	__host__ __device__
 	Particle operator()( int idx )
 	{
+		// Grab x, y values
 		int x = idx % N;
 		int y = idx / N;
 
-		float total_mass( 0 );
-		float x_offset( 0 ), y_offset( 0 );
-
+		// Make tmp pointers to our kernels and advance them as we iterate
 		float * tmpCircKernPtr = circKernel;
 		float * tmpXKernPtr = rxKernel;
 		float * tmpYKernPtr = ryKernel;
 
+		// To be calculated
+		float total_mass( 0 );
+		float x_offset( 0 ), y_offset( 0 );
+
+		// Perform the multiplcations
 		for ( int iY = -kernelRad; iY <= kernelRad; iY++ )
 		{
 			// For y, go down then up
@@ -207,9 +203,11 @@ struct MakeParticleFromIdx
 			}
 		}
 
+		// Calculate x val, y val
 		float x_val = float(x) + x_offset / total_mass;
 		float y_val = float(y) + y_offset / total_mass;
 
+		// Construct particle and return
 		Particle p( x_val, y_val, total_mass, sliceIdx );
 		return p;
 	}
