@@ -421,6 +421,16 @@ struct MaybeRemoveParticle
 	}
 };
 
+template <Particle::State PS>
+struct IsParticleInState
+{
+	__host__ __device__
+	bool operator()( const Particle p )
+	{
+		return p.pState == PS;
+	}
+};
+
 struct IsNonzero
 {
 	__host__ __device__
@@ -447,11 +457,11 @@ uint32_t Solver::FindParticles( Datum& D )
 	const int cellCount = N / cellSize;
 	const int nTotalCells = cellCount * cellCount;
 
-	std::cout << "ThreshImg: " << std::boolalpha << D.d_ThreshImg.isContinuous() << std::endl;
-	std::cout << "Particle Img: " << std::boolalpha << D.d_ParticleImg.isContinuous() << std::endl;
-	std::cout << "circ: " << std::boolalpha << m_dCircleMask.isContinuous() << std::endl;
-	std::cout << "x: " << std::boolalpha << m_dRadXKernel.isContinuous() << std::endl;
-	std::cout << "y: " << std::boolalpha << m_dRadSqKernel.isContinuous() << std::endl;
+	//std::cout << "ThreshImg: " << std::boolalpha << D.d_ThreshImg.isContinuous() << std::endl;
+	//std::cout << "Particle Img: " << std::boolalpha << D.d_ParticleImg.isContinuous() << std::endl;
+	//std::cout << "circ: " << std::boolalpha << m_dCircleMask.isContinuous() << std::endl;
+	//std::cout << "x: " << std::boolalpha << m_dRadXKernel.isContinuous() << std::endl;
+	//std::cout << "y: " << std::boolalpha << m_dRadSqKernel.isContinuous() << std::endl;
 	
 	dFloatptr d_pThreshImgBuf( (float *) D.d_ThreshImg.data );
 	//cv::Mat h_ThreshImg;
@@ -465,9 +475,11 @@ uint32_t Solver::FindParticles( Datum& D )
 
 	// Cull the herd
 	int minSlices = 3;
+	size_t u_preremovePrevParticleCount = m_uCurPrevParticleCount;
 	auto itLastPrevParticleEnd = md_PrevParticleVec.begin() + m_uCurPrevParticleCount;
 	auto itCurPrevParticleEnd = thrust::remove_if( md_PrevParticleVec.begin(), itLastPrevParticleEnd, MaybeRemoveParticle( D.sliceIdx, minSlices ) );
 	m_uCurPrevParticleCount = itCurPrevParticleEnd - md_PrevParticleVec.begin();
+	size_t nRemovedParticles = u_preremovePrevParticleCount - m_uCurPrevParticleCount;
 
 	// Make a device vector out of the particle buffer pointer (it's contiguous)
 	//cv::Mat h_ParticleImg;
@@ -511,7 +523,7 @@ uint32_t Solver::FindParticles( Datum& D )
 	thrust::transform( d_NewParticleVec.begin(), d_NewParticleVec.end(), d_ParticleMatchVec.begin(),
 					   ParticleMatcher( N, m, D.sliceIdx, m_uMaxStackCount, m_uNeighborRadius, d_GridCellLowerBoundsVec.data().get(), d_GridCellUpperBoundsVec.data().get(), md_PrevParticleVec.data().get() ) );
 
-	size_t nullCount = thrust::count_if( d_ParticleMatchVec.begin(), d_ParticleMatchVec.end(), NullCheck() );
+	//size_t nullCount = thrust::count_if( d_ParticleMatchVec.begin(), d_ParticleMatchVec.end(), NullCheck() );
 
 	// Zip the pointer vec and newparticle vec
 	auto itNewParticleToMatchedParticleBegin = thrust::make_zip_iterator( thrust::make_tuple( d_NewParticleVec.begin(), d_ParticleMatchVec.begin() ) );
@@ -519,6 +531,11 @@ uint32_t Solver::FindParticles( Datum& D )
 
 	// If there was a match, update the intensity state. I don't know how to do a for_each_if other than a transform_if that discards the output
 	thrust::transform_if( itNewParticleToMatchedParticleBegin, itNewParticleToMatchedParticleEnd, thrust::discard_iterator<>(), UpdateMatchedParticle( D.sliceIdx ), CheckIfMatchIsNotNull() );
+
+	//size_t numInNoMatch = thrust::count_if( md_PrevParticleVec.begin(), md_PrevParticleVec.end(), IsParticleInState<Particle::State::NO_MATCH>() );
+	//size_t numInIncreasing = thrust::count_if( md_PrevParticleVec.begin(), md_PrevParticleVec.end(), IsParticleInState<Particle::State::INCREASING>() );
+	//size_t numInDecreasing = thrust::count_if( md_PrevParticleVec.begin(), md_PrevParticleVec.end(), IsParticleInState<Particle::State::DECREASING>() );
+	//size_t numInSever = thrust::count_if( md_PrevParticleVec.begin(), md_PrevParticleVec.end(), IsParticleInState<Particle::State::SEVER>() );
 
 	// Copy all unmatched particles into a new vector; we copy a tuple of new particles and pointers to matches, discarding the pointers
 	dParticleVec d_UnmatchedParticleVec( newParticleCount );
@@ -550,7 +567,7 @@ uint32_t Solver::FindParticles( Datum& D )
 
 	// Option B; NYI
 
-	std::cout << "Slice Idx:\t" << D.sliceIdx << "\tNew Particles:\t" << newParticleCount << "\tUnmatched Particles:\t" << numUnmatchedParticles << "\tFound Particles:\t" << m_uCurPrevParticleCount << std::endl;
+	std::cout << "Slice Idx:\t" << D.sliceIdx << "\tNew Particles:\t" << newParticleCount << "\tUnmatched Particles:\t" << numUnmatchedParticles << "\tFound Particles:\t" << m_uCurPrevParticleCount << "\tCulled Particles:\t" << nRemovedParticles << std::endl;
 
 	return m_uCurPrevParticleCount;
 }
