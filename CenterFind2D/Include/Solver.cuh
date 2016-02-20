@@ -30,29 +30,42 @@ struct Particle
 		Particle( float x = -1.f, float y = -1.f, float i = -1.f, int idx = -1 );
 };
 
-class Solver {
+class Solver
+{
 public:
 
 	// Make device pointers to the kernels used in particle solving and the localmax img
-	using dUcharVec = thrust::host_vector < unsigned char >;
-	using dUcharPtr = unsigned char *; //thrust::device_ptr < unsigned char > ;
+	using dUcharVec = thrust::device_vector < unsigned char >;
+	using dUcharPtr = thrust::device_ptr < unsigned char > ;
 
-	using dIntVec = thrust::host_vector < int >; //thrust::device_vector < int > ;
-	using dIntPtr = int *; // thrust::device_ptr < int > ;
+	using dIntVec = thrust::device_vector < int > ;
+	using dIntPtr = thrust::device_ptr < int > ;
 
-	using dFloatVec = thrust::host_vector < float >;
-	using dFloatptr = float *;// thrust::device_ptr < float > ;
+	using dFloatVec = thrust::device_vector < float >;
+	using dFloatptr = thrust::device_ptr < float > ;
 
-	using dParticleVec = thrust::host_vector < Particle >;
-	using dParticleptr = Particle *;// thrust::device_ptr < float > ;
+	using dParticleVec = thrust::device_vector < Particle >;
+	using dParticlePtrVec = thrust::device_vector < Particle * >;
 
-	using dParticlePtrVec = thrust::host_vector < Particle * > ;
+	using dImg = GpuMat;
 
-	using dImg = cv::Mat; // GpuMat;
+	//using dUcharVec = thrust::host_vector < unsigned char >;
+	//using dUcharPtr = unsigned char *;
+
+	//using dIntVec = thrust::host_vector < int >;
+	//using dIntPtr = int *;
+
+	//using dFloatVec = thrust::host_vector < float >;
+	//using dFloatptr = float *;
+
+	//using dParticleVec = thrust::host_vector < Particle >;
+	//using dParticlePtrVec = thrust::host_vector < Particle * >;
+
+	//using dImg = cv::Mat;
 
 	Solver();
-	Solver(uint32_t mR, uint32_t fR, uint32_t minSC, uint32_t maxSC, uint32_t nR);
-	uint32_t FindParticles(Datum& D);
+	Solver( uint32_t mR, uint32_t fR, uint32_t minSC, uint32_t maxSC, uint32_t nR );
+	uint32_t FindParticles( Datum& D );
 	std::vector<Particle> GetFoundParticles() const;
 private:
 	uint32_t m_uMaskRadius;

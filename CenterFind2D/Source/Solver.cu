@@ -87,9 +87,16 @@ m_uCurPrevParticleCount( 0 )
 	//h_RY.copyTo( m_dRadYKernel );
 	//h_R2.copyTo( m_dRadSqKernel );
 
+	m_dCircleMask = cv::cuda::createContinuous( cv::Size( diameter, diameter ), CV_32F );
 	m_dCircleMask.upload( h_Circ );
+
+	m_dRadXKernel = cv::cuda::createContinuous( cv::Size( diameter, diameter ), CV_32F );
 	m_dRadXKernel.upload( h_RX );
+	
+	m_dRadYKernel = cv::cuda::createContinuous( cv::Size( diameter, diameter ), CV_32F );
 	m_dRadYKernel.upload( h_RY );
+	
+	m_dRadSqKernel = cv::cuda::createContinuous( cv::Size( diameter, diameter ), CV_32F );
 	m_dRadSqKernel.upload( h_R2 );
 }
 
@@ -120,9 +127,9 @@ struct PixelToGridIdx : public thrust::unary_function < Particle, int >
 	PixelToGridIdx( int n, int m ) :N( n ), M( m ) {}
 
 	__host__ __device__
-	int operator()( const Particle& p )
+	int operator()( Particle p )
 	{
-		return pixelToGridIdx( p.x, p.y, N, M );
+		return pixelToGridIdx( p, N, M );
 	}
 };
 
@@ -249,7 +256,7 @@ struct ParticleMatcher
 		cellIndices[0] = pixelToGridIdx( newParticle, N, M );
 
 		// Neighbors to follow
-		Particle * pBestMatch = nullptr;
+		const Particle * pBestMatch = nullptr;
 		for ( int c = 0; cellIndices[c] >= 0; c++ )
 		{
 			// It would be nice to parallelize around this, but probably not worth it
@@ -258,7 +265,7 @@ struct ParticleMatcher
 			int upper = cellUpperBound[cellIdx];
 			for ( int p = lower; p < upper; p++ )
 			{
-				Particle& oldParticle = prevParticles[p];
+				const Particle& oldParticle = prevParticles[p];
 
 				// tooFar might not be necessary if I cull beforehand
 				bool tooFar = ( sliceIdx - oldParticle.lastContributingsliceIdx != 1 );
@@ -283,17 +290,17 @@ struct ParticleMatcher
 
 						// If this one is closer, assign it as the match
 						if ( pow( dX, 2 ) + pow( dY, 2 ) > distSq )
-							pBestMatch = &oldParticle;
+							pBestMatch = &prevParticles[p];
 					}
 					else 
-						pBestMatch = &oldParticle;
+						pBestMatch = &prevParticles[p];
 				}
 			}
 		}
 
 		// Could check sever state here
 
-		return pBestMatch;
+		return (Particle *) pBestMatch;
 	}
 };
 
@@ -416,12 +423,22 @@ struct MaybeRemoveParticle
 
 struct IsNonzero
 {
+	__host__ __device__
 	bool operator()( const unsigned char val )
 	{
 		return val != 0;
 	}
 };
 
+struct NullCheck
+{
+	__host__ __device__
+	bool operator()( Particle * p )
+	{
+		return p == nullptr;
+	}
+};
+#include <iomanip>
 uint32_t Solver::FindParticles( Datum& D )
 {
 	const int N = D.d_LocalMaxImg.rows;
@@ -430,21 +447,35 @@ uint32_t Solver::FindParticles( Datum& D )
 	const int cellCount = N / cellSize;
 	const int nTotalCells = cellCount * cellCount;
 
-	dFloatptr d_pLocalMaxImgBuf( D.d_LocalMaxImg.ptr<float>() );
-	dFloatptr d_pCirleKernel( m_dCircleMask.ptr<float>() );
-	dFloatptr d_pRxKernel( m_dRadXKernel.ptr<float>() );
-	dFloatptr d_pRyKernel( m_dRadYKernel.ptr<float>() );
-	dFloatptr d_pR2Kernel( m_dRadSqKernel.ptr<float>() );
+	std::cout << "ThreshImg: " << std::boolalpha << D.d_ThreshImg.isContinuous() << std::endl;
+	std::cout << "Particle Img: " << std::boolalpha << D.d_ParticleImg.isContinuous() << std::endl;
+	std::cout << "circ: " << std::boolalpha << m_dCircleMask.isContinuous() << std::endl;
+	std::cout << "x: " << std::boolalpha << m_dRadXKernel.isContinuous() << std::endl;
+	std::cout << "y: " << std::boolalpha << m_dRadSqKernel.isContinuous() << std::endl;
+	
+	dFloatptr d_pThreshImgBuf( (float *) D.d_ThreshImg.data );
+	//cv::Mat h_ThreshImg;
+	//D.d_ThreshImg.download( h_ThreshImg );
+	//dFloatptr d_pLocalMaxImgBuf( h_ThreshImg.ptr<float>() );
+
+	dFloatptr d_pCirleKernel( (float *) m_dCircleMask.data );
+	dFloatptr d_pRxKernel( (float *) m_dRadXKernel.data );
+	dFloatptr d_pRyKernel( (float *) m_dRadYKernel.data );
+	dFloatptr d_pR2Kernel( (float *) m_dRadSqKernel.data );
 
 	// Cull the herd
 	int minSlices = 3;
 	auto itLastPrevParticleEnd = md_PrevParticleVec.begin() + m_uCurPrevParticleCount;
-	itLastPrevParticleEnd = thrust::remove_if( md_PrevParticleVec.begin(), itLastPrevParticleEnd, MaybeRemoveParticle( D.sliceIdx, minSlices ) );
-	m_uCurPrevParticleCount = itLastPrevParticleEnd - md_PrevParticleVec.begin();
+	auto itCurPrevParticleEnd = thrust::remove_if( md_PrevParticleVec.begin(), itLastPrevParticleEnd, MaybeRemoveParticle( D.sliceIdx, minSlices ) );
+	m_uCurPrevParticleCount = itCurPrevParticleEnd - md_PrevParticleVec.begin();
 
 	// Make a device vector out of the particle buffer pointer (it's contiguous)
-	dUcharPtr d_pParticleImgBuf( D.d_ParticleImg.ptr<unsigned char>() );
-	dUcharVec d_ParticleImgVec( d_pParticleImgBuf, d_pParticleImgBuf + D.d_ParticleImg.size().area() );
+	//cv::Mat h_ParticleImg;
+	//D.d_ParticleImg.download( h_ParticleImg );
+	//dUcharPtr d_pParticleImgBuf( h_ParticleImg.ptr<unsigned char>() );
+	dUcharPtr d_pParticleImgBufStart( (unsigned char *) D.d_ParticleImg.datastart );
+	dUcharPtr d_pParticleImgBufEnd( (unsigned char *) D.d_ParticleImg.dataend );
+	dUcharVec d_ParticleImgVec( d_pParticleImgBufStart, d_pParticleImgBufEnd );
 
 	// For each pixel in the particle image, we care if it's nonzero and if it's far enough from the edges
 	// So we need its index (transformable into twoD pos) and its value
@@ -460,7 +491,7 @@ uint32_t Solver::FindParticles( Datum& D )
 	// Now transform each index into a particle by looking at values inside the lmimg and using the kernels
 	dParticleVec d_NewParticleVec( newParticleCount );
 	thrust::transform( d_NewParticleIndicesVec.begin(), d_NewParticleIndicesVec.begin() + newParticleCount, d_NewParticleVec.begin(),
-					   MakeParticleFromIdx( D.sliceIdx, N, m_uMaskRadius, d_pLocalMaxImgBuf.get(), d_pCirleKernel.get(), d_pRxKernel.get(), d_pRyKernel.get(), d_pR2Kernel.get() ) );
+					   MakeParticleFromIdx( D.sliceIdx, N, m_uMaskRadius, d_pThreshImgBuf.get(), d_pCirleKernel.get(), d_pRxKernel.get(), d_pRyKernel.get(), d_pR2Kernel.get() ) );
 
 	// The grid cell vec might be split into two vecs like this (they should also be class members, but I'll do that later)
 	dIntVec d_GridCellLowerBoundsVec( nTotalCells ), d_GridCellUpperBoundsVec( nTotalCells );
@@ -470,7 +501,7 @@ uint32_t Solver::FindParticles( Datum& D )
 	using pixelToGridIdxIter = thrust::transform_iterator < PixelToGridIdx, particleIter >;
 
 	pixelToGridIdxIter itPrevParticleBegin = thrust::make_transform_iterator<PixelToGridIdx, particleIter>( md_PrevParticleVec.begin(), PixelToGridIdx( N, m ) );
-	pixelToGridIdxIter itPrevParticleEnd = thrust::make_transform_iterator<PixelToGridIdx, particleIter>( itLastPrevParticleEnd, PixelToGridIdx( N, m ) );
+	pixelToGridIdxIter itPrevParticleEnd = thrust::make_transform_iterator<PixelToGridIdx, particleIter>( itCurPrevParticleEnd, PixelToGridIdx( N, m ) );
 
 	thrust::lower_bound( itPrevParticleBegin, itPrevParticleEnd, thrust::counting_iterator<int>( 0 ), thrust::counting_iterator<int>( nTotalCells ), d_GridCellLowerBoundsVec.begin() );
 	thrust::upper_bound( itPrevParticleBegin, itPrevParticleEnd, thrust::counting_iterator<int>( 0 ), thrust::counting_iterator<int>( nTotalCells ), d_GridCellUpperBoundsVec.begin() );
@@ -479,6 +510,8 @@ uint32_t Solver::FindParticles( Datum& D )
 	dParticlePtrVec d_ParticleMatchVec( newParticleCount );
 	thrust::transform( d_NewParticleVec.begin(), d_NewParticleVec.end(), d_ParticleMatchVec.begin(),
 					   ParticleMatcher( N, m, D.sliceIdx, m_uMaxStackCount, m_uNeighborRadius, d_GridCellLowerBoundsVec.data().get(), d_GridCellUpperBoundsVec.data().get(), md_PrevParticleVec.data().get() ) );
+
+	size_t nullCount = thrust::count_if( d_ParticleMatchVec.begin(), d_ParticleMatchVec.end(), NullCheck() );
 
 	// Zip the pointer vec and newparticle vec
 	auto itNewParticleToMatchedParticleBegin = thrust::make_zip_iterator( thrust::make_tuple( d_NewParticleVec.begin(), d_ParticleMatchVec.begin() ) );
@@ -508,7 +541,7 @@ uint32_t Solver::FindParticles( Datum& D )
 
 		// copy unmatched particles onto the original end of the previous particle vec
 		auto itNewParticleDest = md_PrevParticleVec.begin() + m_uCurPrevParticleCount;
-		thrust::copy( d_UnmatchedParticleVec.begin(), d_UnmatchedParticleVec.end(), itNewParticleDest );
+		thrust::copy( d_UnmatchedParticleVec.begin(), d_UnmatchedParticleVec.begin() + numUnmatchedParticles, itNewParticleDest );
 
 		// Sort the whole thing
 		thrust::sort( md_PrevParticleVec.begin(), md_PrevParticleVec.begin() + newPrevParticleCount, ParticleOrderingComp( N, m ) );
