@@ -186,7 +186,7 @@ Solver::ParticlePtrVec Solver::findParticleMatches( ParticleVec& d_NewParticleVe
 	// Only go through this is there are cells we could match with
 	if ( m_dPrevParticleVec.empty() == false )
 		thrust::transform( d_NewParticleVec.begin(), d_NewParticleVec.end(), d_ParticleMatchVec.begin(),
-					   ParticleMatcher( N, m_uMaxLevel, sliceIdx, m_uMaxSliceCount, m_uNeighborRadius, m_dGridCellLowerBoundVec.data().get(), m_dGridCellUpperBoundVec.data().get(), m_dPrevParticleVec.data().get() ) );
+		ParticleMatcher( N, m_uMaxLevel, sliceIdx, m_uMaxSliceCount, m_dGridCellLowerBoundVec.size(), m_uNeighborRadius, m_dGridCellLowerBoundVec.data().get(), m_dGridCellUpperBoundVec.data().get(), m_dPrevParticleVec.data().get() ) );
 
 	return d_ParticleMatchVec;
 }

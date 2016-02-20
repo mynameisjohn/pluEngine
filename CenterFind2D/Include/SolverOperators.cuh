@@ -186,10 +186,11 @@ struct MakeParticleFromIdx
 // This operator searches through the grid cells of our previous particle and tries to find a match
 struct ParticleMatcher
 {
-	int N;					// Image dimension
-	int M;					// Maximum # of subdivisions
-	int sliceIdx;			// current slice index
-	int maxStackCount;		// max # of slices that can contribute to a particle
+	int N;						// Image dimension
+	int M;						// Maximum # of subdivisions
+	int sliceIdx;				// current slice index
+	int maxStackCount;			// max # of slices that can contribute to a particle
+	int cellCount;				// The total number of grid cells
 	float neighborRadius;		// radius around which we search for matches
 
 	int * cellLowerBound;		// Pointer to lower bound of prev particle range
@@ -197,11 +198,12 @@ struct ParticleMatcher
 
 	Particle* prevParticles;	// Pointer to the vector of previous particles
 
-	ParticleMatcher( int n, int m, int s, int mSC, int nR, int * cLB, int * cUB, Particle * pP ) :
+	ParticleMatcher( int n, int m, int s, int mSC, int cC, int nR, int * cLB, int * cUB, Particle * pP ) :
 		N( n ),
 		M( m ),
 		sliceIdx( s ),
 		maxStackCount( mSC ),
+		cellCount( cC ),
 		neighborRadius( nR ),
 		cellLowerBound( cLB ),
 		cellUpperBound( cUB ),
@@ -216,10 +218,46 @@ struct ParticleMatcher
 		// There are a total of 9 cells we might have to search. last is sentinel
 		int cellIndices[10] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
 
-		// See if we need to search neighbors
-
 		// But we always search at least one
 		cellIndices[0] = pixelToGridIdx( newParticle, N, M );
+
+		// See if we need to search neighbors
+		int neighborIdx = 1;
+		int cellX = cellIndices[0] % cellCount;
+		int cellY = cellIndices[0] / cellCount;
+		int cellSize = N / cellCount;
+
+		// Check left if we aren't on the left edge
+		if ( cellX != 0 )
+		{
+			float left = cellX * cellSize;
+			if ( newParticle.x - neighborRadius < left )
+				cellIndices[neighborIdx++] = cellIndices[0] - 1;
+		}
+
+		// Check right if we aren't on the right edge
+		if ( cellX != cellCount - 1 )
+		{
+			float right = ( cellX + 1 ) * cellSize;
+			if ( newParticle.x + float( neighborRadius ) > right )
+				cellIndices[neighborIdx++] = cellIndices[0] + 1;
+		}
+
+		// Check below if we aren't at the bottom
+		if ( cellY != 0 )
+		{
+			float bottom = cellY * cellSize;
+			if ( newParticle.y - neighborRadius < bottom )
+				cellIndices[neighborIdx++] = cellIndices[0] - cellCount;
+		}
+
+		// Check above if we aren't on top
+		if ( cellY != cellCount - 1 )
+		{
+			float top = ( cellY + 1 ) * cellSize;
+			if ( newParticle.y + neighborRadius > top )
+				cellIndices[neighborIdx++] = cellIndices[0] + cellCount;
+		}
 
 		// Neighbors to follow
 		const Particle * pBestMatch = nullptr;
