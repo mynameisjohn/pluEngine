@@ -36,7 +36,7 @@ Datum::Datum() :
 	sliceIdx(0) 
 {}
 
-Datum::Datum(FIBITMAP * bmp, uint32_t sliceIdx) :
+Datum::Datum(FIBITMAP * bmp, int sliceIdx) :
 sliceIdx(sliceIdx) {
 	// Create 24-bit RGB image, initialize to zero
 	cv::Mat image = cv::Mat::zeros(FreeImage_GetWidth(bmp), FreeImage_GetHeight(bmp), CV_8UC3);
@@ -56,10 +56,11 @@ sliceIdx(sliceIdx) {
 	d_FilteredImg = GpuMat(d_InputImg.size(), CV_32F, 0.f);
 	d_DilateImg = GpuMat(d_InputImg.size(), CV_32F, 0.f);	
 	d_TmpImg = GpuMat(d_InputImg.size(), CV_32F, 0.f);
+	d_LocalMaxImg = GpuMat( d_InputImg.size(), CV_32F, 0.f );
 
 	// It's in our best interest to ensure these are continuous
-	cv::cuda::createContinuous( d_InputImg.size(), CV_32F, d_LocalMaxImg );
-	d_LocalMaxImg.setTo( 0.f );
+	cv::cuda::createContinuous( d_InputImg.size(), CV_32F, d_ThreshImg );
+	d_ThreshImg.setTo( 0.f );
 
 	cv::cuda::createContinuous( d_InputImg.size(), CV_8U, d_ParticleImg);
 	d_ParticleImg.setTo(0);
@@ -94,7 +95,7 @@ ImgOperator(),
 m_uGaussianRadius(radius),
 m_fHWHM(hwhm) {
 	// Create circle image
-	uint32_t diameter = 2 * m_uGaussianRadius + 1;
+	int diameter = 2 * m_uGaussianRadius + 1;
 	cv::Mat h_Circle = cv::Mat::zeros(cv::Size(diameter, diameter), CV_32F);
 	cv::circle(h_Circle, cv::Size(m_uGaussianRadius, m_uGaussianRadius), m_uGaussianRadius, 1.f, -1);
 
@@ -130,7 +131,7 @@ void BandPass::Execute(Datum& D) {
 	cv::cuda::threshold(bp, bp, 0, 1, cv::THRESH_TOZERO);
 }
 
-uint32_t BandPass::GetGaussianRadius() const
+int BandPass::GetGaussianRadius() const
 {
 	return m_uGaussianRadius;
 }
@@ -151,7 +152,7 @@ ImgOperator(),
 m_uDilationRadius(radius),
 m_fPctleThreshold(pctl_thresh) {
 	// Create dilation mask
-	uint32_t diameter = 2 * m_uDilationRadius + 1;
+	int diameter = 2 * m_uDilationRadius + 1;
 	cv::Mat h_Dilation = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(diameter, diameter));
 
 	// Create dilation kernel from host kernel (only single byte supported? why nVidia why)
@@ -182,7 +183,7 @@ void LocalMax::Execute(Datum& D) {
 	lm.convertTo( D.d_ParticleImg, CV_8U );
 }
 
-uint32_t LocalMax::GetDilationRadius() const
+int LocalMax::GetDilationRadius() const
 {
 	return m_uDilationRadius;
 }

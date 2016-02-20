@@ -45,7 +45,6 @@ void RemapImage(GpuMat& img, float m, float M) {
 	cv::cuda::minMax(img, &min, &max);
 	double alpha = range / (max - min);
 	double beta = range * min / (max - min);
-	double scale = range / (max - min);
 	img.convertTo(img, CV_32F, alpha, beta);
 }
 

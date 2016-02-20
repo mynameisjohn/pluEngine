@@ -123,7 +123,7 @@ void Engine::getUserParams( Datum D, BandPass * pEngineBP, LocalMax * pEngineLM 
 	trackBarCallback( 0, nullptr );
 
 	// Wait while user sets things until they press a key (any key?)
-	//cv::waitKey();
+	cv::waitKey();
 
 	// Destroy window
 	cv::destroyWindow( windowName );
@@ -132,4 +132,12 @@ void Engine::getUserParams( Datum D, BandPass * pEngineBP, LocalMax * pEngineLM 
 	*pEngineBP = BandPass( mapParamValues[gaussRadiusTBName] / trackBarResolution, mapParamValues[hwhmTBName] / trackBarResolution );
 	*pEngineLM = LocalMax( mapParamValues[dilationRadiusTBName] / trackBarResolution, mapParamValues[particleThreshTBName] / trackBarResolution );
 	//*pEngineSolver = Solver( 3, mapParamValues[gaussRadiusTBName] / trackBarResolution, 3, 5, 8 );
+}
+
+// Quick function to create continuous gpumat from existing host mat
+GpuMat getContinuousGpuMat( cv::Mat& m )
+{
+	GpuMat ret = cv::cuda::createContinuous( m.size(), m.type() );
+	ret.upload( m );
+	return ret;
 }
