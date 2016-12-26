@@ -50,8 +50,8 @@ ELSE(WIN32)
 
   # FreeImage (this is where apt put it for me)
   SET(FREEIMG_INC_DIR /usr/include)
-  SET(FREEIMG_LIB_DIR /usr/lib)
-  SET(FREEIMG_LIB FreeImage)
+  SET(FREEIMG_LIB_DIR /usr/lib/x86_64-linux-gnu)
+  SET(FREEIMG_LIB freeimage)
 ENDIF(WIN32)
 
 # Set up link directories
@@ -59,7 +59,7 @@ LINK_DIRECTORIES(${OCV_LIB_DIR} ${FREEIMG_LIB_DIR})
 
 # Include directories
 INCLUDE_DIRECTORIES(
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/Include
     ${OCV_INC_DIR}
     ${FREEIMG_INC_DIR})
 
