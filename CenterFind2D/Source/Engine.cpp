@@ -61,6 +61,7 @@ void Engine::getUserParams( Datum D, BandPass * pEngineBP, LocalMax * pEngineLM 
 	const float trackBarResolution = 1000;
 	for ( auto& it : mapParamValues )
 		it.second *= trackBarResolution;
+
 	// Trackbar callback, implemented below
 	std::function<void( int, void * )> trackBarCallback = [&] ( int pos, void * priv ) {
 		// Construct operators based on current trackbar values
