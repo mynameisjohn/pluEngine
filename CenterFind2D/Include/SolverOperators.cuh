@@ -383,3 +383,14 @@ struct ParticleOrderingComp
 		return pixelToGridIdx( a, N, M ) < pixelToGridIdx( b, N, M );
 	}
 };
+
+// We consider a particle "Found" if it's in the Severed intensity state and
+// has at least 3 particles contributing (should the 3 be hardcoded?)
+struct IsFoundParticle
+{
+	__host__ __device__
+		bool operator()( const Particle p )
+	{
+		return p.pState == Particle::State::SEVER && p.nContributingParticles > 2;
+	}
+};

@@ -102,7 +102,7 @@ auto makeZipIt( const Args&... args ) -> decltype( thrust::make_zip_iterator( th
 	return thrust::make_zip_iterator( thrust::make_tuple( args... ) );
 }
 
-// This function removes particles from the vector of previously found particles if they 
+// This function removes particles from the vector of previously found particles if they
 // pass the predicate MaybeRemoveParticle
 size_t Solver::cullExistingParticles( int curSliceIdx )
 {
@@ -261,7 +261,7 @@ int Solver::FindParticles( Datum& D )
 	UcharPtr d_pParticleImgBufStart( (unsigned char *) D.d_ParticleImg.datastart );
 	UcharPtr d_pParticleImgBufEnd( (unsigned char *) D.d_ParticleImg.dataend );
 	UcharVec d_ParticleImgVec( d_pParticleImgBufStart, d_pParticleImgBufEnd );
-	
+
 	/// For host debugging
 	//cv::Mat h_ThreshImg;
 	//D.d_ThreshImg.download( h_ThreshImg );
@@ -302,15 +302,18 @@ int Solver::FindParticles( Datum& D )
 
 std::vector<Particle> Solver::GetFoundParticles() const
 {
+	// We consider a particle "found" if it's intensity state is severed
+	// Reserve enough space for all previously found, though the actual may be less
+	ParticleVec d_vFoundParticles( m_uCurPrevParticleCount );
 
-	//int nParticles = std::count_if( m_vPrevParticles.begin(), m_vPrevParticles.end(), [] ( const Particle& p ) {
-	//	return p.pState == Particle::State::SEVER && p.nContributingParticles > 2;
-	//} );
-	//std::cout << "Final particle count: " << nParticles << std::endl;
+	// Copy all found particles that meet the IsFoundParticle criterion
+	thrust::copy_if( m_dPrevParticleVec.begin(), m_dPrevParticleVec.end(), d_vFoundParticles.begin(), IsFoundParticle() );
+	cudaDeviceSynchronize();
 
-	std::vector<Particle> ret;
-	//( m_vFoundParticles.size() );
-	//std::transform( m_vFoundParticles.begin(), m_vFoundParticles.end(), ret.begin(),
-	//				[] ( const ParticleStack& pS ) {return pS.GetRefinedParticle(); } );
-	return ret;
+	// Download to host, return
+	std::vector<Particle> vRet( d_vFoundParticles.size() );
+	thrust::copy( d_vFoundParticles.begin(), d_vFoundParticles.end(), vRet.begin() );
+	cudaDeviceSynchronize();
+
+	return vRet;
 }
