@@ -34,8 +34,8 @@ int Engine::Execute() {
 		m_ParticleSolver->FindParticles(D);
 	}
 
-	//auto shit = m_ParticleSolver->GetFoundParticles();
-	return 0;
+    std::vector<Particle> vFoundParticles = m_ParticleSolver->GetFoundParticles();
+	return vFoundParticles.size();
 }
 
 

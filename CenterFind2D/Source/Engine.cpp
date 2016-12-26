@@ -10,6 +10,7 @@ bool Engine::Init( std::list<std::string> liStackPaths, int startOfStack, int en
 	// For each tiff stack
 	int sliceIdx( 0 );
 	std::cout << "Starting to load slices..." << std::endl;
+
 	for ( auto& stackPath : liStackPaths )
 	{
 		// Attempt to open multibitmap
@@ -41,6 +42,7 @@ bool Engine::Init( std::list<std::string> liStackPaths, int startOfStack, int en
 // This intentionally copies the Datum object, since we kind of modify it
 void Engine::getUserParams( Datum D, BandPass * pEngineBP, LocalMax * pEngineLM )
 {
+
 	// Window name
 	std::string windowName = "PLuTARC CenterFind";
 
@@ -62,6 +64,8 @@ void Engine::getUserParams( Datum D, BandPass * pEngineBP, LocalMax * pEngineLM 
 	for ( auto& it : mapParamValues )
 		it.second *= trackBarResolution;
 
+    try
+    {
 	// Trackbar callback, implemented below
 	std::function<void( int, void * )> trackBarCallback = [&] ( int pos, void * priv ) {
 		// Construct operators based on current trackbar values
@@ -128,10 +132,18 @@ void Engine::getUserParams( Datum D, BandPass * pEngineBP, LocalMax * pEngineLM 
 
 	// Destroy window
 	cv::destroyWindow( windowName );
+    }
+    catch(cv::Exception e)
+    {
+        std::cout << e.what() << std::endl;
+        std::cout << "Error creating user interface! Using default parameters\n" << std::endl;
+    }
 
-	// Fill in pointers with new items
+	// Fill in DSP objects with new param values
 	*pEngineBP = BandPass( mapParamValues[gaussRadiusTBName] / trackBarResolution, mapParamValues[hwhmTBName] / trackBarResolution );
 	*pEngineLM = LocalMax( mapParamValues[dilationRadiusTBName] / trackBarResolution, mapParamValues[particleThreshTBName] / trackBarResolution );
+
+    // Solver params need to be adjusted, but it doesn't mean much to adjust from the POV of one image
 	//*pEngineSolver = Solver( 3, mapParamValues[gaussRadiusTBName] / trackBarResolution, 3, 5, 8 );
 }
 
