@@ -282,7 +282,7 @@ struct ParticleMatcher
 				// See if the particle is within our range
 				float dX = oldParticle.x - newParticle.x;
 				float dY = oldParticle.y - newParticle.y;
-				float distSq = pow( dX, 2 ) + pow( dY, 2 );
+				float distSq = powf( dX, 2 ) + powf( dY, 2 );
 
 				if ( distSq < neighborRadius * neighborRadius )
 				{
@@ -294,7 +294,7 @@ struct ParticleMatcher
 						dY = pBestMatch->y - newParticle.y;
 
 						// If this one is closer, assign it as the match
-						if ( pow( dX, 2 ) + pow( dY, 2 ) > distSq )
+						if ( powf( dX, 2 ) + powf( dY, 2 ) > distSq )
 							pBestMatch = &prevParticles[p];
 					}
 					else
