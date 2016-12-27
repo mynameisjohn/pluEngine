@@ -5,10 +5,13 @@ CMAKE_MINIMUM_REQUIRED(VERSION 2.8)
 
 SET(CMAKE_CXX_FLAGS "-std=c++11")
 
-IF(UNIX AND NOT APPLE)
-  SET(CMAKE_C_COMPILER gcc-4.8)
-  SET(CMAKE_CXX_COMPILER g++-4.8)
-ENDIF(UNIX AND NOT APPLE)
+# With CUDA 6.5, a lower version of gcc
+# than the one I have installed is required
+# I manually installed gcc-4.8, but it may be unnecessary
+# IF(UNIX AND NOT APPLE)
+#   SET(CMAKE_C_COMPILER gcc-4.8)
+#   SET(CMAKE_CXX_COMPILER g++-4.8)
+# ENDIF(UNIX AND NOT APPLE)
 
 # This must be set to Debug or Release (really just Debug or other...)
 IF(${CMAKE_BUILD_TYPE} STREQUAL "Debug")
