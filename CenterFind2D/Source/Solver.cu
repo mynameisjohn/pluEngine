@@ -308,12 +308,10 @@ std::vector<Particle> Solver::GetFoundParticles() const
 
 	// Copy all found particles that meet the IsFoundParticle criterion
 	thrust::copy_if( m_dPrevParticleVec.begin(), m_dPrevParticleVec.end(), d_vFoundParticles.begin(), IsFoundParticle() );
-	cudaDeviceSynchronize();
 
 	// Download to host, return
 	std::vector<Particle> vRet( d_vFoundParticles.size() );
 	thrust::copy( d_vFoundParticles.begin(), d_vFoundParticles.end(), vRet.begin() );
-	cudaDeviceSynchronize();
 
 	return vRet;
 }
